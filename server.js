@@ -1,0 +1,245 @@
+﻿// server.js - FIXED VERSION with correct imports
+const express = require('express');
+const cors = require('cors');
+const dotenv = require('dotenv');
+
+dotenv.config();
+
+const app = express();
+
+// ============================================================
+// DATABASE SETUP
+// ============================================================
+const db = require('./src/models');
+
+// Auto-sync database in development
+const syncDatabase = async () => {
+  try {
+    console.log('\x1b[36m🔍 Checking database connection...\x1b[0m');
+    
+    // Test connection
+    await db.sequelize.authenticate();
+    console.log('\x1b[32m✅ Database connection established\x1b[0m');
+    
+    // Sync in development only
+    if (process.env.NODE_ENV === 'development') {
+      await db.sequelize.sync();
+      console.log('\x1b[32m✅ Database models synced\x1b[0m');
+    }
+    
+  } catch (error) {
+    console.error('\x1b[31m❌ Database error:\x1b[0m', error.message);
+    console.log('\x1b[33m⚠️  Starting server anyway...\x1b[0m');
+  }
+};
+
+// ============================================================
+// MIDDLEWARE
+// ============================================================
+
+app.use(cors({
+  origin: '*',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Request logging middleware
+app.use((req, res, next) => {
+  const timestamp = new Date().toISOString();
+  console.log(`\x1b[90m[${timestamp}] ${req.method} ${req.path}\x1b[0m`);
+  next();
+});
+
+// ============================================================
+// ROUTES IMPORT - FIXED IMPORTS
+// ============================================================
+
+// Import routes - USE THE CORRECT FILE NAMES
+const authRoutes = require('./src/routes/auth.routes');
+const productRoutes = require('./src/routes/products.routes'); // Changed to 'products.routes'
+const orderRoutes = require('./src/routes/order.routes');
+const locationRoutes = require('./src/routes/location.routes'); // Add this
+const cartRoutes = require('./src/routes/cart.routes');
+// ADD THESE TWO LINES:
+const agentRoutes = require('./src/routes/agents.routes'); // For authenticated agent endpoints
+const agentsRoutes = require('./src/routes/agents.routes'); // For public agents endpoints
+
+// ============================================================
+// ROUTES
+// ============================================================
+
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: '🚀 Mtaani Gas Marketplace API is running!',
+    version: '3.0.0',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      auth: {
+        register_step1: 'POST /api/auth/register/step1 - Basic registration',
+        verify_step2: 'POST /api/auth/verify/step2 - Verify + set role',
+        login: 'POST /api/auth/login - Login',
+        resend_verification: 'POST /api/auth/resend-verification - Resend code'
+      },
+      products: {
+        gas_brands: 'GET /api/products/gas-brands - Get all gas brands',
+        brand_sizes: 'GET /api/products/brand/:id/sizes - Get sizes for a brand',
+        search_agents: 'GET /api/products/brand/:id/size/:size/agents - Find agents',
+        search: 'GET /api/products/search?query=... - Search products',
+        details: 'GET /api/products/:id - Get product details'
+      },
+      agent: {
+        my_listings: 'GET /api/products/agent/listings - Get agent listings',
+        create_listing: 'POST /api/products/agent/listings - Create listing',
+        update_listing: 'PUT /api/products/agent/listings/:id - Update listing',
+        delete_listing: 'DELETE /api/products/agent/listings/:id - Delete listing'
+      },
+      agents: {  // ADD THIS SECTION
+        nearby: 'GET /api/agents/nearby?lat&lng&radius - Find nearby agents',
+        by_brand: 'GET /api/agents/brand/:brandId - Get agents by brand'
+      },
+      orders: {
+        place_order: 'POST /api/orders - Place order',
+        my_orders: 'GET /api/orders/customer - Get customer orders',
+        agent_orders: 'GET /api/orders/agent - Get agent orders',
+        order_details: 'GET /api/orders/:id - Get order details',
+        update_status: 'PUT /api/orders/agent/:id/status - Update status',
+        cancel_order: 'PUT /api/orders/customer/:id/cancel - Cancel order',
+        add_rating: 'POST /api/orders/:id/rating - Add rating'
+      },
+      system: {
+        health: 'GET /health - System health check',
+        root: 'GET / - This documentation'
+      }
+    }
+  });
+});
+
+// API Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/products', productRoutes);
+app.use('/api/orders', orderRoutes);
+app.use('/api/location', locationRoutes); // Add this
+app.use('/api/cart', cartRoutes);
+// ADD THESE TWO LINES:
+app.use('/api/agent', agentRoutes); // For authenticated agent endpoints
+app.use('/api/agents', agentsRoutes); // For public agents endpoints
+
+// Test route
+app.get('/api/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'All routes are working!',
+    routes: {
+      auth: '/api/auth/*',
+      products: '/api/products/*',
+      orders: '/api/orders/*',
+      agent: '/api/agent/*',
+      agents: '/api/agents/*',
+      location: '/api/location/*',
+      cart: '/api/cart/*'
+    }
+  });
+});
+
+// Enhanced health check
+app.get('/health', async (req, res) => {
+  const healthcheck = {
+    success: true,
+    status: 'healthy',
+    service: 'Mtaani Gas Marketplace API',
+    version: '3.0.0',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development'
+  };
+
+  try {
+    await db.sequelize.authenticate();
+    healthcheck.database = 'connected';
+  } catch (error) {
+    healthcheck.database = 'disconnected';
+    healthcheck.status = 'unhealthy';
+    healthcheck.success = false;
+    healthcheck.error = error.message;
+  }
+
+  const statusCode = healthcheck.success ? 200 : 503;
+  res.status(statusCode).json(healthcheck);
+});
+
+// 404 handler - UPDATE THIS TOO
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: 'Endpoint not found',
+    requested_url: req.originalUrl,
+    available_endpoints: {
+      auth: '/api/auth/*',
+      products: '/api/products/*',
+      orders: '/api/orders/*',
+      agent: '/api/agent/*',
+      agents: '/api/agents/*',
+      location: '/api/location/*',
+      cart: '/api/cart/*',
+      health: '/health',
+      docs: '/'
+    }
+  });
+});
+
+// Error handler
+app.use((err, req, res, next) => {
+  console.error('\x1b[31m❌ Server Error:\x1b[0m', err);
+  
+  res.status(err.status || 500).json({
+    success: false,
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ============================================================
+// START SERVER
+// ============================================================
+
+const PORT = process.env.PORT || 5000;
+
+const startServer = async () => {
+  try {
+    await syncDatabase();
+    
+    app.listen(PORT, () => {
+      console.log('\n' + '='.repeat(70));
+      console.log('\x1b[1m\x1b[36m🚀 MTAANI GAS MARKETPLACE BACKEND STARTED\x1b[0m');
+      console.log('='.repeat(70));
+      console.log(`📡 Port: ${PORT}`);
+      console.log(`🌐 URL: http://localhost:${PORT}`);
+      console.log(`🏷️  Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log('='.repeat(70));
+      console.log('\n📋 AVAILABLE ENDPOINTS:');
+      console.log('👉 POST /api/auth/register/step1    - Register');
+      console.log('👉 POST /api/auth/verify/step2      - Verify + choose role');
+      console.log('👉 POST /api/auth/login             - Login');
+      console.log('👉 GET  /api/products/gas-brands    - Get gas brands');
+      console.log('👉 GET  /api/agents/nearby          - Find nearby agents');
+      console.log('👉 GET  /api/agent/profile          - Get agent profile');
+      console.log('👉 GET  /api/health                 - Health check');
+      console.log('='.repeat(70));
+      console.log('\n\x1b[32m✅ Server ready!\x1b[0m\n');
+    });
+
+  } catch (error) {
+    console.error('\x1b[31m❌ Failed to start server:\x1b[0m', error);
+    process.exit(1);
+  }
+};
+
+// Start the server
+startServer();
