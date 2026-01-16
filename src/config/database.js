@@ -12,7 +12,11 @@ const sequelize = new Sequelize(
     logging: false,
     timezone: '+03:00', // Kenya Time (UTC+3)
     dialectOptions: {
-      useUTC: false, // Don't use UTC, use local Kenya time
+      ssl: {
+        require: true,              // Render requires SSL
+        rejectUnauthorized: false   // allow self-signed certs
+      },
+      useUTC: false                 // use local Kenya time
     },
     define: {
       timestamps: true,
@@ -23,7 +27,7 @@ const sequelize = new Sequelize(
     pool: {
       max: 5,
       min: 0,
-      acquire: 30000,
+      acquire: 60000,  // wait longer before failing
       idle: 10000
     }
   }
@@ -31,7 +35,7 @@ const sequelize = new Sequelize(
 
 // Test connection
 sequelize.authenticate()
-  .then(() => console.log('Database connected successfully (Kenya Time: UTC+3)'))
-  .catch(err => console.error('Database connection error:', err));
+  .then(() => console.log('✅ Database connected successfully (Kenya Time: UTC+3, SSL enabled)'))
+  .catch(err => console.error('❌ Database connection error:', err));
 
 module.exports = sequelize;
