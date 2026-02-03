@@ -1,50 +1,28 @@
-// src/routes/agent.routes.js - FIXED VERSION
 const express = require('express');
 const router = express.Router();
-const auth = require('../middleware/authMiddleware'); // Import the whole module
-const agentController = require('../controllers/agent.controller');
+const agentsController = require('../controllers/agentsController');
+const { authMiddleware } = require('../middleware/authMiddleware');
 
-// Apply authentication middleware to all agent routes
-router.use(auth.authMiddleware); // Use auth.authMiddleware
+// Public routes - accessible by anyone
+router.get('/nearby', agentsController.getNearbyAgents);
+router.get('/brand/:brandId', agentsController.getAgentsByBrand);
+router.get('/brands-with-agent-counts', agentsController.getGasBrandsWithAgentCounts);
 
-// Dashboard Routes
-router.get('/dashboard/stats', agentController.getDashboardStats);
-router.get('/earnings/stats', agentController.getEarningsStats);
-router.get('/orders/recent', agentController.getRecentOrders);
-router.get('/orders/stats', agentController.getOrderStats);
+// Protected route for updating user location
+router.put('/update-location', authMiddleware, agentsController.updateUserLocation);
 
-// Orders Management
-router.get('/orders', agentController.getAgentOrders);
-router.get('/orders/:orderId', agentController.getOrderDetails);
-router.put('/orders/:orderId/status', agentController.updateOrderStatus);
-router.put('/orders/:orderId/delivery', agentController.updateDeliveryStatus);
-router.post('/orders/:orderId/cancel', agentController.cancelOrder);
-
-// Products Management
-router.get('/products', agentController.getAgentProducts);
-router.get('/products/:productId', agentController.getProductDetails);
-router.post('/products', agentController.addProduct);
-router.put('/products/:productId', agentController.updateProduct);
-router.delete('/products/:productId', agentController.deleteProduct);
-router.put('/products/:productId/stock', agentController.updateStock);
-
-// Earnings & Analytics
-router.get('/earnings', agentController.getAgentEarnings);
-router.get('/earnings/analytics', agentController.getEarningsAnalytics);
-router.get('/earnings/daily', agentController.getDailyEarnings);
-router.get('/earnings/monthly', agentController.getMonthlyEarnings);
-
-// Profile & Settings
-router.get('/profile', agentController.getAgentProfile);
-router.put('/profile', agentController.updateAgentProfile);
-router.put('/profile/location', agentController.updateLocation);
-router.put('/profile/contact', agentController.updateContactInfo);
-router.post('/profile/verification', agentController.submitVerification);
-
-// Notifications & Support
-router.get('/notifications', agentController.getNotifications);
-router.put('/notifications/read/:notificationId', agentController.markNotificationRead);
-router.get('/support/tickets', agentController.getSupportTickets);
-router.post('/support/tickets', agentController.createSupportTicket);
+// Health check
+router.get('/health', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Agents service is running',
+    endpoints: [
+      { method: 'GET', path: '/agents/nearby', query: 'lat, lng, radius, brand_id, size' },
+      { method: 'GET', path: '/agents/brand/:brandId', query: 'lat, lng, radius' },
+      { method: 'GET', path: '/agents/brands-with-agent-counts', query: 'lat, lng, radius' },
+      { method: 'PUT', path: '/agents/update-location', auth: true }
+    ]
+  });
+});
 
 module.exports = router;

@@ -12,6 +12,9 @@ router.post('/:order_id/rating', authMiddleware, orderController.addRating);
 // Agent routes
 router.get('/agent', authMiddleware, orderController.getAgentOrders);
 router.put('/agent/:order_id/status', authMiddleware, orderController.updateOrderStatus);
+router.get('/agent/stats', authMiddleware, orderController.getAgentOrderStats); // NEW
+router.get('/agent/recent', authMiddleware, orderController.getAgentRecentOrders); // NEW
+router.get('/agent/summary', authMiddleware, orderController.getOrderStatusSummary); // NEW
 
 // Common routes (both customer and agent)
 router.get('/:order_id', authMiddleware, orderController.getOrderDetails);

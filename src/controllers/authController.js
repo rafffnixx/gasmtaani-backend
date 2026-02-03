@@ -560,13 +560,18 @@ class AuthController {
         gas_brand_ids,
         id_number,
         kra_pin,
-        business_registration_number
+        business_registration_number,
+        town,
+        county
       } = req.body;
 
       console.log(consoleStyle.info, '📦 Agent Profile Data:');
       console.log(consoleStyle.data, `   User ID: ${userId}`);
       console.log(consoleStyle.data, `   Business: ${business_name}`);
       console.log(consoleStyle.data, `   Location: ${area_name}`);
+      console.log(consoleStyle.data, `   Coordinates: ${latitude}, ${longitude}`);
+      console.log(consoleStyle.data, `   Town: ${town || 'Not provided'}`);
+      console.log(consoleStyle.data, `   County: ${county || 'Not provided'}`);
       console.log(consoleStyle.data, `   Brands: ${JSON.stringify(gas_brand_ids)}`);
       console.log(consoleStyle.data, `   ID Number: ${id_number || 'Not provided'}`);
       console.log(consoleStyle.data, `   KRA PIN: ${kra_pin || 'Not provided'}`);
@@ -644,7 +649,7 @@ class AuthController {
 
       console.log(consoleStyle.success, '✅ User is verified agent');
 
-      // Update user with agent details
+      // Update user with agent details INCLUDING LOCATION FIELDS
       console.log(consoleStyle.info, '🔄 Updating user details...');
       await user.update({
         business_name,
@@ -652,6 +657,8 @@ class AuthController {
         area_name,
         latitude: latitude || null,
         longitude: longitude || null,
+        town: town || null,
+        county: county || null,
         id_number: id_number || null,
         kra_pin: kra_pin || null,
         business_registration_number: business_registration_number || null,
@@ -661,6 +668,10 @@ class AuthController {
       }, { transaction });
 
       console.log(consoleStyle.success, '✅ User details updated');
+      console.log(consoleStyle.data, `   Location saved: ${latitude}, ${longitude}`);
+      console.log(consoleStyle.data, `   Area: ${area_name}`);
+      console.log(consoleStyle.data, `   Town: ${town || 'Not set'}`);
+      console.log(consoleStyle.data, `   County: ${county || 'Not set'}`);
 
       // Clear existing brand associations
       console.log(consoleStyle.info, '🔗 Managing brand associations...');
@@ -744,13 +755,21 @@ class AuthController {
       await transaction.commit();
       console.log(consoleStyle.success, '✅ Transaction committed');
 
-      // Get updated user
+      // Get updated user with LOCATION FIELDS
       const updatedUser = await db.User.findByPk(userId, {
+        attributes: [
+          'id', 'email', 'phone_number', 'full_name', 'user_type',
+          'is_verified', 'is_agent_profile_complete',
+          'latitude', 'longitude', 'area_name', 'town', 'county', 'address',
+          'business_name', 'business_address', 'agent_status', 'profile_completed_at',
+          'created_at', 'updated_at'
+        ],
         include: [
           {
             model: db.GasBrand,
             as: 'gasBrands',
-            attributes: ['id', 'name', 'logo_url']
+            attributes: ['id', 'name', 'logo_url'],
+            through: { attributes: [] }
           },
           {
             model: db.AgentProfile,
@@ -760,7 +779,7 @@ class AuthController {
           {
             model: db.Wallet,
             as: 'wallet',
-            attributes: ['balance', 'currency']
+            attributes: ['id', 'balance', 'currency']
           }
         ]
       });
@@ -774,6 +793,7 @@ class AuthController {
       console.log(consoleStyle.info, `   👤 Agent: ${updatedUser.full_name}`);
       console.log(consoleStyle.info, `   🏢 Business: ${business_name}`);
       console.log(consoleStyle.info, `   📍 Location: ${area_name}`);
+      console.log(consoleStyle.info, `   🗺️  Coordinates: ${latitude}, ${longitude}`);
       console.log(consoleStyle.success, `   🏷️  Brands: ${brands.length} brand(s)`);
       console.log(consoleStyle.success, `   📋 Listings: ${createdListings.length} created`);
       console.log(consoleStyle.warning, `   ⏳ Status: Pending admin approval`);
@@ -789,6 +809,9 @@ class AuthController {
         agent_details: {
           business_name: updatedUser.business_name,
           area_name: updatedUser.area_name,
+          coordinates: { latitude: updatedUser.latitude, longitude: updatedUser.longitude },
+          town: updatedUser.town,
+          county: updatedUser.county,
           gas_brands: updatedUser.gasBrands,
           profile_status: updatedUser.agentProfile?.approval_status,
           listings_created: createdListings.length
@@ -928,7 +951,7 @@ class AuthController {
   };
 
   /**
-   * 📋 GET USER PROFILE - ENHANCED VERSION
+   * 📋 GET USER PROFILE - UPDATED WITH LOCATION FIELDS
    */
   getUserProfile = async (req, res) => {
     console.log('\n' + '='.repeat(80));
@@ -944,7 +967,15 @@ class AuthController {
       console.log(consoleStyle.data, `   User Type: ${req.user.user_type}`);
       console.log(consoleStyle.data, `   Email: ${req.user.email}`);
 
+      // UPDATED: Include location fields in attributes
       const user = await db.User.findByPk(userId, {
+        attributes: [
+          'id', 'email', 'phone_number', 'full_name', 'user_type',
+          'is_verified', 'is_agent_profile_complete',
+          'latitude', 'longitude', 'area_name', 'town', 'county', 'address', // LOCATION FIELDS ADDED
+          'business_name', 'business_address', 'agent_status', 'profile_completed_at',
+          'created_at', 'updated_at'
+        ],
         include: [
           {
             model: db.Wallet,
@@ -962,10 +993,7 @@ class AuthController {
             as: 'agentProfile',
             attributes: ['id', 'rating', 'total_orders', 'commission_rate', 'approval_status']
           }
-        ],
-        attributes: {
-          exclude: ['password_hash', 'reset_token', 'reset_token_expiry']
-        }
+        ]
       });
 
       if (!user) {
@@ -976,6 +1004,7 @@ class AuthController {
         });
       }
 
+      // UPDATED: Include location fields in response
       const formattedUser = {
         id: user.id,
         email: user.email,
@@ -984,15 +1013,22 @@ class AuthController {
         user_type: user.user_type,
         is_verified: user.is_verified,
         is_agent_profile_complete: user.is_agent_profile_complete,
-        address: user.address,
+        // LOCATION FIELDS:
+        latitude: user.latitude,
+        longitude: user.longitude,
         area_name: user.area_name,
         town: user.town,
         county: user.county,
+        address: user.address,
         created_at: user.created_at,
+        updated_at: user.updated_at,
         wallet: user.wallet,
         gas_brands: user.gasBrands,
         agent_profile: user.agentProfile
       };
+
+      // Calculate hasLocation for convenience
+      formattedUser.hasLocation = user.latitude !== null && user.longitude !== null;
 
       // Add agent-specific fields
       if (user.user_type === 'agent') {
@@ -1006,6 +1042,14 @@ class AuthController {
       console.log(consoleStyle.data, `   User: ${formattedUser.full_name || formattedUser.email}`);
       console.log(consoleStyle.data, `   Type: ${formattedUser.user_type}`);
       console.log(consoleStyle.data, `   Verified: ${formattedUser.is_verified ? 'Yes' : 'No'}`);
+      console.log(consoleStyle.data, `   Has Location: ${formattedUser.hasLocation ? 'Yes' : 'No'}`);
+      
+      if (formattedUser.hasLocation) {
+        console.log(consoleStyle.data, `   Coordinates: ${formattedUser.latitude}, ${formattedUser.longitude}`);
+        console.log(consoleStyle.data, `   Area: ${formattedUser.area_name || 'Not set'}`);
+        console.log(consoleStyle.data, `   Town: ${formattedUser.town || 'Not set'}`);
+        console.log(consoleStyle.data, `   County: ${formattedUser.county || 'Not set'}`);
+      }
 
       res.json({
         success: true,
@@ -1027,7 +1071,7 @@ class AuthController {
   };
 
   /**
-   * ✏️ UPDATE USER PROFILE
+   * ✏️ UPDATE USER PROFILE - UPDATED WITH LOCATION FIELDS
    */
   updateUserProfile = async (req, res) => {
     console.log('\n' + '='.repeat(80));
@@ -1043,7 +1087,9 @@ class AuthController {
         address,
         area_name,
         town,
-        county
+        county,
+        latitude,
+        longitude
       } = req.body;
 
       console.log(consoleStyle.info, '📦 Update Request:');
@@ -1051,6 +1097,12 @@ class AuthController {
       console.log(consoleStyle.data, `   Full Name: ${full_name || 'Not provided'}`);
       console.log(consoleStyle.data, `   Email: ${email || 'Not provided'}`);
       console.log(consoleStyle.data, `   Phone: ${phone_number || 'Not provided'}`);
+      console.log(consoleStyle.data, `   Location Fields:`);
+      console.log(consoleStyle.data, `     - Latitude: ${latitude || 'Not provided'}`);
+      console.log(consoleStyle.data, `     - Longitude: ${longitude || 'Not provided'}`);
+      console.log(consoleStyle.data, `     - Area: ${area_name || 'Not provided'}`);
+      console.log(consoleStyle.data, `     - Town: ${town || 'Not provided'}`);
+      console.log(consoleStyle.data, `     - County: ${county || 'Not provided'}`);
 
       const user = await db.User.findByPk(userId);
 
@@ -1062,31 +1114,37 @@ class AuthController {
         });
       }
 
-      // Build update object
+      // Build update object with location fields
       const updates = {};
       if (full_name !== undefined) updates.full_name = full_name;
       if (email !== undefined) updates.email = email;
       if (phone_number !== undefined) updates.phone_number = this.normalizePhoneNumber(phone_number);
+      // LOCATION FIELDS
       if (address !== undefined) updates.address = address;
       if (area_name !== undefined) updates.area_name = area_name;
       if (town !== undefined) updates.town = town;
       if (county !== undefined) updates.county = county;
+      if (latitude !== undefined) updates.latitude = latitude;
+      if (longitude !== undefined) updates.longitude = longitude;
       updates.updated_at = new Date();
 
       await user.update(updates);
 
-      // Get updated user
+      // Get updated user with location fields
       const updatedUser = await db.User.findByPk(userId, {
+        attributes: [
+          'id', 'email', 'phone_number', 'full_name', 'user_type',
+          'is_verified', 'is_agent_profile_complete',
+          'latitude', 'longitude', 'area_name', 'town', 'county', 'address',
+          'created_at', 'updated_at'
+        ],
         include: [
           {
             model: db.Wallet,
             as: 'wallet',
             attributes: ['id', 'balance', 'currency']
           }
-        ],
-        attributes: {
-          exclude: ['password_hash', 'reset_token', 'reset_token_expiry']
-        }
+        ]
       });
 
       const formattedUser = {
@@ -1096,15 +1154,23 @@ class AuthController {
         full_name: updatedUser.full_name,
         user_type: updatedUser.user_type,
         is_verified: updatedUser.is_verified,
+        // LOCATION FIELDS
+        latitude: updatedUser.latitude,
+        longitude: updatedUser.longitude,
         address: updatedUser.address,
         area_name: updatedUser.area_name,
         town: updatedUser.town,
         county: updatedUser.county,
-        wallet: updatedUser.wallet
+        wallet: updatedUser.wallet,
+        hasLocation: updatedUser.latitude !== null && updatedUser.longitude !== null
       };
 
       console.log(consoleStyle.success, '✅ Profile updated successfully');
       console.log(consoleStyle.data, `   Updated fields: ${Object.keys(updates).join(', ')}`);
+      
+      if (updates.latitude || updates.longitude) {
+        console.log(consoleStyle.data, `   New location: ${formattedUser.latitude}, ${formattedUser.longitude}`);
+      }
 
       res.json({
         success: true,
@@ -1264,6 +1330,12 @@ class AuthController {
 
       const user = await db.User.findOne({
         where: whereClause,
+        attributes: [
+          'id', 'email', 'phone_number', 'full_name', 'user_type',
+          'is_verified', 'is_agent_profile_complete',
+          'latitude', 'longitude', 'area_name', 'town', 'county', 'address',
+          'created_at', 'updated_at'
+        ],
         include: [
           {
             model: db.VerificationCode,
@@ -1286,7 +1358,16 @@ class AuthController {
         success: true,
         user: this.formatUserResponse(user),
         verification_codes: user.verificationCodes,
-        current_time: new Date().toISOString()
+        current_time: new Date().toISOString(),
+        has_location: user.latitude !== null && user.longitude !== null,
+        location: {
+          latitude: user.latitude,
+          longitude: user.longitude,
+          area_name: user.area_name,
+          town: user.town,
+          county: user.county,
+          address: user.address
+        }
       });
 
     } catch (error) {
@@ -1299,7 +1380,7 @@ class AuthController {
   };
 
   // ============================================================================
-  // UTILITY METHODS
+  // UTILITY METHODS - UPDATED WITH LOCATION FIELDS
   // ============================================================================
 
   formatUserResponse = (user, wallet = null) => {
@@ -1311,6 +1392,14 @@ class AuthController {
       user_type: user.user_type,
       is_verified: user.is_verified,
       is_agent_profile_complete: user.is_agent_profile_complete,
+      // LOCATION FIELDS
+      latitude: user.latitude,
+      longitude: user.longitude,
+      area_name: user.area_name,
+      town: user.town,
+      county: user.county,
+      address: user.address,
+      hasLocation: user.latitude !== null && user.longitude !== null,
       wallet: wallet || user.wallet,
       created_at: user.created_at
     };
@@ -1318,7 +1407,6 @@ class AuthController {
     // Add agent-specific fields
     if (user.user_type === 'agent') {
       response.business_name = user.business_name;
-      response.area_name = user.area_name;
       response.agent_status = user.agent_status;
       response.profile_completed_at = user.profile_completed_at;
       response.gas_brands = user.gasBrands || [];

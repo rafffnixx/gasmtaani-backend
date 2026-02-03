@@ -1,441 +1,638 @@
 const db = require('../models');
 
-class LocationController {
-  // Calculate distance between two coordinates (Haversine formula)
-  calculateDistance = (lat1, lon1, lat2, lon2) => {
-    const R = 6371; // Earth's radius in km
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = 
-      Math.sin(dLat/2) * Math.sin(dLat/2) +
-      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-      Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c; // Distance in km
-  };
-
-  // Update user location
-  updateLocation = async (req, res) => {
-    try {
-      const userId = req.user.id;
-      const { 
-        latitude, 
-        longitude, 
-        address, 
-        area_name, 
-        town, 
-        county 
-      } = req.body;
-
-      console.log(`📍 Updating location for user ${userId}`);
-      console.log(`📌 Coordinates: ${latitude}, ${longitude}`);
-      console.log(`🏠 Address: ${address}`);
-
-      // Validate coordinates
-      if (!latitude || !longitude) {
-        return res.status(400).json({
-          success: false,
-          message: 'Latitude and longitude are required'
-        });
-      }
-
-      const user = await db.User.findByPk(userId);
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-
-      // Update user location
-      await user.update({
-        latitude: parseFloat(latitude),
-        longitude: parseFloat(longitude),
-        address: address,
-        area_name: area_name,
-        town: town,
-        county: county
-      });
-
-      console.log(`✅ Location updated for user ${userId}`);
-
-      res.json({
-        success: true,
-        message: 'Location updated successfully',
-        location: {
-          latitude: user.latitude,
-          longitude: user.longitude,
-          address: user.address,
-          area_name: user.area_name,
-          town: user.town,
-          county: user.county,
-          updated_at: user.updated_at
-        }
-      });
-
-    } catch (error) {
-      console.error('❌ Error updating location:', error);
-      res.status(500).json({
+// Get user location
+exports.getUserLocation = async (req, res) => {
+  try {
+    console.log('📍 Getting location for user:', req.user.id);
+    
+    const user = await db.User.findByPk(req.user.id, {
+      attributes: ['id', 'latitude', 'longitude', 'area_name', 'town', 'county', 'address', 'created_at', 'updated_at']
+    });
+    
+    if (!user) {
+      return res.status(404).json({
         success: false,
-        message: 'Failed to update location',
-        error: error.message
+        message: 'User not found'
       });
     }
-  };
+    
+    // Check if user has location data
+    const hasLocation = user.latitude !== null && user.longitude !== null;
+    
+    res.json({
+      success: true,
+      hasLocation: hasLocation,
+      location: {
+        latitude: user.latitude,
+        longitude: user.longitude,
+        area_name: user.area_name,
+        town: user.town,
+        county: user.county,
+        address: user.address
+      },
+      user: {
+        id: user.id
+      },
+      timestamps: {
+        created_at: user.created_at,
+        updated_at: user.updated_at
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error fetching user location:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch location',
+      error: error.message
+    });
+  }
+};
 
-  // Get nearby agents (for customers)
-  getNearbyAgents = async (req, res) => {
-    try {
-      const userId = req.user.id;
-      const { 
-        latitude, 
-        longitude, 
-        radius = 10, // Default 10km radius
-        brand_id,
-        size 
-      } = req.query;
-
-      console.log(`🔍 Finding nearby agents for user ${userId}`);
-      console.log(`📍 User location: ${latitude}, ${longitude}`);
-      console.log(`📏 Search radius: ${radius}km`);
-
-      // Get user's location
-      const user = await db.User.findByPk(userId, {
-        attributes: ['id', 'latitude', 'longitude']
+// Create or update location (POST - can handle both create and update)
+exports.createOrUpdateLocation = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { latitude, longitude, area_name, town, county, address } = req.body;
+    
+    console.log('📍 Creating/Updating location for user:', userId, { latitude, longitude, area_name });
+    
+    // Validate required fields
+    if (!latitude || !longitude) {
+      return res.status(400).json({
+        success: false,
+        message: 'Latitude and longitude are required'
       });
+    }
+    
+    // Parse and validate coordinates
+    const validation = validateCoordinates(latitude, longitude);
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: validation.message
+      });
+    }
+    
+    const lat = validation.lat;
+    const lng = validation.lng;
+    
+    // Check if user exists
+    const user = await db.User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    // Determine if this is a create or update
+    const existingLocation = user.latitude !== null && user.longitude !== null;
+    
+    // Update user location
+    const [updated] = await db.User.update(
+      {
+        latitude: lat,
+        longitude: lng,
+        area_name: area_name || null,
+        town: town || null,
+        county: county || null,
+        address: address || null,
+        updated_at: new Date()
+      },
+      {
+        where: { id: userId },
+        returning: true
+      }
+    );
+    
+    if (updated === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found or location not updated'
+      });
+    }
+    
+    // Get updated user
+    const updatedUser = await db.User.findByPk(userId, {
+      attributes: ['id', 'latitude', 'longitude', 'area_name', 'town', 'county', 'address', 'updated_at']
+    });
+    
+    res.json({
+      success: true,
+      message: existingLocation ? 'Location updated successfully' : 'Location created successfully',
+      action: existingLocation ? 'updated' : 'created',
+      location: {
+        latitude: updatedUser.latitude,
+        longitude: updatedUser.longitude,
+        area_name: updatedUser.area_name,
+        town: updatedUser.town,
+        county: updatedUser.county,
+        address: updatedUser.address
+      },
+      timestamps: {
+        updated_at: updatedUser.updated_at
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error creating/updating user location:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to save location',
+      error: error.message
+    });
+  }
+};
 
-      let userLat, userLon;
-      
-      if (latitude && longitude) {
-        // Use provided coordinates
-        userLat = parseFloat(latitude);
-        userLon = parseFloat(longitude);
-      } else if (user.latitude && user.longitude) {
-        // Use user's saved location
-        userLat = parseFloat(user.latitude);
-        userLon = parseFloat(user.longitude);
+// Update location (PUT - requires all fields)
+exports.updateUserLocation = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { latitude, longitude, area_name, town, county, address } = req.body;
+    
+    console.log('📍 Updating location for user:', userId);
+    
+    // Validate required fields for PUT
+    if (!latitude || !longitude) {
+      return res.status(400).json({
+        success: false,
+        message: 'Latitude and longitude are required'
+      });
+    }
+    
+    // Parse and validate coordinates
+    const validation = validateCoordinates(latitude, longitude);
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: validation.message
+      });
+    }
+    
+    const lat = validation.lat;
+    const lng = validation.lng;
+    
+    // Check if location exists to update
+    const user = await db.User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    if (user.latitude === null || user.longitude === null) {
+      return res.status(404).json({
+        success: false,
+        message: 'No location found to update. Use POST to create a location first.'
+      });
+    }
+    
+    // Update user location
+    const [updated] = await db.User.update(
+      {
+        latitude: lat,
+        longitude: lng,
+        area_name: area_name !== undefined ? area_name : user.area_name,
+        town: town !== undefined ? town : user.town,
+        county: county !== undefined ? county : user.county,
+        address: address !== undefined ? address : user.address,
+        updated_at: new Date()
+      },
+      {
+        where: { id: userId },
+        returning: true
+      }
+    );
+    
+    if (updated === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Location not updated'
+      });
+    }
+    
+    // Get updated user
+    const updatedUser = await db.User.findByPk(userId, {
+      attributes: ['id', 'latitude', 'longitude', 'area_name', 'town', 'county', 'address', 'updated_at']
+    });
+    
+    res.json({
+      success: true,
+      message: 'Location updated successfully',
+      location: {
+        latitude: updatedUser.latitude,
+        longitude: updatedUser.longitude,
+        area_name: updatedUser.area_name,
+        town: updatedUser.town,
+        county: updatedUser.county,
+        address: updatedUser.address
+      },
+      timestamps: {
+        updated_at: updatedUser.updated_at
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error updating user location:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update location',
+      error: error.message
+    });
+  }
+};
+
+// Partially update location (PATCH)
+exports.patchUserLocation = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const updates = req.body;
+    
+    console.log('📍 Patching location for user:', userId, updates);
+    
+    // Check if user exists
+    const user = await db.User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    // Validate coordinates if provided
+    if (updates.latitude || updates.longitude) {
+      if (updates.latitude && updates.longitude) {
+        const validation = validateCoordinates(updates.latitude, updates.longitude);
+        if (!validation.valid) {
+          return res.status(400).json({
+            success: false,
+            message: validation.message
+          });
+        }
+        updates.latitude = validation.lat;
+        updates.longitude = validation.lng;
       } else {
         return res.status(400).json({
           success: false,
-          message: 'Location required. Either provide coordinates or update your profile location.'
+          message: 'Both latitude and longitude must be provided together'
         });
       }
-
-      // Build base query for listings
-      let whereCondition = {
-        is_available: true,
-        available_quantity: { [db.Sequelize.Op.gt]: 0 }
-      };
-
-      if (brand_id) whereCondition.gas_brand_id = brand_id;
-      if (size) whereCondition.size = size;
-
-      // Get all active listings
-      const listings = await db.AgentGasListing.findAll({
-        where: whereCondition,
-        include: [
-          {
-            model: db.User,
-            as: 'listingAgent',
-            attributes: ['id', 'email', 'phone_number', 'latitude', 'longitude', 'address', 'area_name', 'business_name', 'profile_image']
-          },
-          {
-            model: db.GasBrand,
-            as: 'gasBrand',
-            attributes: ['id', 'name', 'logo_url']
-          }
-        ]
-      });
-
-      console.log(`📦 Found ${listings.length} listings initially`);
-
-      // Filter by distance
-      const radiusKm = parseFloat(radius);
-      const nearbyListings = listings.filter(listing => {
-        const agent = listing.listingAgent;
-        
-        if (!agent.latitude || !agent.longitude) return false;
-        
-        const agentLat = parseFloat(agent.latitude);
-        const agentLon = parseFloat(agent.longitude);
-        
-        const distance = this.calculateDistance(userLat, userLon, agentLat, agentLon);
-        listing.dataValues.distance = parseFloat(distance.toFixed(2));
-        
-        return distance <= radiusKm;
-      });
-
-      // Sort by distance (closest first)
-      nearbyListings.sort((a, b) => a.dataValues.distance - b.dataValues.distance);
-
-      console.log(`📍 Found ${nearbyListings.length} listings within ${radiusKm}km`);
-
-      // Format response
-      const formattedListings = nearbyListings.map(listing => ({
-        listing_id: listing.id,
-        agent: {
-          id: listing.listingAgent.id,
-          name: listing.listingAgent.business_name || `Agent ${listing.listingAgent.id}`,
-          phone: listing.listingAgent.phone_number,
-          email: listing.listingAgent.email,
-          profile_image: listing.listingAgent.profile_image,
-          location: {
-            latitude: listing.listingAgent.latitude,
-            longitude: listing.listingAgent.longitude,
-            address: listing.listingAgent.address,
-            area_name: listing.listingAgent.area_name
-          },
-          distance: listing.dataValues.distance,
-          rating: listing.rating,
-          total_orders: listing.total_orders
-        },
-        product: {
-          brand: listing.gasBrand.name,
-          brand_id: listing.gasBrand.id,
-          brand_logo: listing.gasBrand.logo_url,
-          size: listing.size,
-          price: parseFloat(listing.selling_price),
-          original_price: listing.original_price ? parseFloat(listing.original_price) : null,
-          cylinder_condition: listing.cylinder_condition
-        },
-        availability: {
-          quantity: listing.available_quantity,
-          delivery_available: listing.delivery_available,
-          delivery_fee: listing.delivery_fee ? parseFloat(listing.delivery_fee) : 0,
-          delivery_hours: listing.delivery_hours
-        }
-      }));
-
-      // Group by agent for better presentation
-      const agentsMap = new Map();
-      formattedListings.forEach(listing => {
-        const agentId = listing.agent.id;
-        if (!agentsMap.has(agentId)) {
-          agentsMap.set(agentId, {
-            agent: listing.agent,
-            products: []
-          });
-        }
-        agentsMap.get(agentId).products.push({
-          listing_id: listing.listing_id,
-          brand: listing.product.brand,
-          size: listing.product.size,
-          price: listing.product.price,
-          quantity: listing.availability.quantity
-        });
-      });
-
-      const agents = Array.from(agentsMap.values());
-
-      res.json({
-        success: true,
-        user_location: {
-          latitude: userLat,
-          longitude: userLon,
-          provided: !!(latitude && longitude)
-        },
-        search_radius: radiusKm,
-        total_listings: formattedListings.length,
-        total_agents: agents.length,
-        agents: agents,
-        listings: formattedListings
-      });
-
-    } catch (error) {
-      console.error('❌ Error finding nearby agents:', error);
-      res.status(500).json({
+    }
+    
+    // Add updated timestamp
+    updates.updated_at = new Date();
+    
+    // Update user location
+    const [updated] = await db.User.update(updates, {
+      where: { id: userId },
+      returning: true,
+      fields: ['latitude', 'longitude', 'area_name', 'town', 'county', 'address', 'updated_at']
+    });
+    
+    if (updated === 0) {
+      return res.status(404).json({
         success: false,
-        message: 'Failed to find nearby agents',
-        error: error.message
+        message: 'Location not updated'
       });
     }
-  };
-
-  // Get user's current location
-  getUserLocation = async (req, res) => {
-    try {
-      const userId = req.user.id;
-
-      const user = await db.User.findByPk(userId, {
-        attributes: ['id', 'latitude', 'longitude', 'address', 'area_name', 'town', 'county', 'updated_at']
-      });
-
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
+    
+    // Get updated user
+    const updatedUser = await db.User.findByPk(userId, {
+      attributes: ['id', 'latitude', 'longitude', 'area_name', 'town', 'county', 'address', 'updated_at']
+    });
+    
+    res.json({
+      success: true,
+      message: 'Location patched successfully',
+      location: {
+        latitude: updatedUser.latitude,
+        longitude: updatedUser.longitude,
+        area_name: updatedUser.area_name,
+        town: updatedUser.town,
+        county: updatedUser.county,
+        address: updatedUser.address
+      },
+      timestamps: {
+        updated_at: updatedUser.updated_at
       }
+    });
+    
+  } catch (error) {
+    console.error('Error patching user location:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to patch location',
+      error: error.message
+    });
+  }
+};
 
-      res.json({
-        success: true,
-        has_location: !!(user.latitude && user.longitude),
-        location: user.latitude && user.longitude ? {
-          latitude: user.latitude,
-          longitude: user.longitude,
-          address: user.address,
-          area_name: user.area_name,
-          town: user.town,
-          county: user.county,
-          last_updated: user.updated_at
-        } : null,
-        message: user.latitude && user.longitude 
-          ? 'Location found' 
-          : 'No location set. Please update your location.'
-      });
-
-    } catch (error) {
-      console.error('❌ Error getting user location:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to get location',
-        error: error.message
-      });
-    }
-  };
-
-  // Search agents by location (public endpoint - no auth required)
-  searchAgentsByLocation = async (req, res) => {
-    try {
-      const { 
-        latitude, 
-        longitude, 
-        radius = 10,
-        brand_id,
-        size,
-        max_price,
-        min_price
-      } = req.query;
-
-      console.log(`🔍 Public search for agents near ${latitude}, ${longitude}`);
-      console.log(`📏 Radius: ${radius}km`);
-
-      if (!latitude || !longitude) {
-        return res.status(400).json({
-          success: false,
-          message: 'Latitude and longitude are required for location search'
-        });
+// Delete user location
+exports.deleteUserLocation = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    console.log('📍 Deleting location for user:', userId);
+    
+    const [updated] = await db.User.update(
+      {
+        latitude: null,
+        longitude: null,
+        area_name: null,
+        town: null,
+        county: null,
+        address: null,
+        updated_at: new Date()
+      },
+      {
+        where: { id: userId }
       }
-
-      const userLat = parseFloat(latitude);
-      const userLon = parseFloat(longitude);
-      const radiusKm = parseFloat(radius);
-
-      // Build query conditions
-      let whereCondition = {
-        is_available: true,
-        available_quantity: { [db.Sequelize.Op.gt]: 0 }
-      };
-
-      if (brand_id) whereCondition.gas_brand_id = brand_id;
-      if (size) whereCondition.size = size;
-      if (max_price) whereCondition.selling_price = { [db.Sequelize.Op.lte]: parseFloat(max_price) };
-      if (min_price) whereCondition.selling_price = { 
-        ...whereCondition.selling_price,
-        [db.Sequelize.Op.gte]: parseFloat(min_price)
-      };
-
-      // Get listings
-      const listings = await db.AgentGasListing.findAll({
-        where: whereCondition,
-        include: [
-          {
-            model: db.User,
-            as: 'listingAgent',
-            where: {
-              latitude: { [db.Sequelize.Op.ne]: null },
-              longitude: { [db.Sequelize.Op.ne]: null },
-              is_active: true
-            },
-            attributes: ['id', 'email', 'phone_number', 'latitude', 'longitude', 'address', 'area_name', 'business_name']
-          },
-          {
-            model: db.GasBrand,
-            as: 'gasBrand',
-            attributes: ['id', 'name', 'logo_url']
-          }
-        ]
-      });
-
-      console.log(`📦 Found ${listings.length} listings with location data`);
-
-      // Filter by distance
-      const nearbyListings = listings.filter(listing => {
-        const agent = listing.listingAgent;
-        const agentLat = parseFloat(agent.latitude);
-        const agentLon = parseFloat(agent.longitude);
-        
-        const distance = this.calculateDistance(userLat, userLon, agentLat, agentLon);
-        listing.dataValues.distance = parseFloat(distance.toFixed(2));
-        
-        return distance <= radiusKm;
-      });
-
-      // Sort by distance then price
-      nearbyListings.sort((a, b) => {
-        if (a.dataValues.distance !== b.dataValues.distance) {
-          return a.dataValues.distance - b.dataValues.distance;
-        }
-        return a.selling_price - b.selling_price;
-      });
-
-      console.log(`📍 ${nearbyListings.length} listings within ${radiusKm}km`);
-
-      // Format response
-      const formattedListings = nearbyListings.map(listing => ({
-        listing_id: listing.id,
-        agent: {
-          id: listing.listingAgent.id,
-          name: listing.listingAgent.business_name || `Agent ${listing.listingAgent.id}`,
-          phone: listing.listingAgent.phone_number,
-          location: {
-            latitude: listing.listingAgent.latitude,
-            longitude: listing.listingAgent.longitude,
-            address: listing.listingAgent.address,
-            area_name: listing.listingAgent.area_name,
-            distance: listing.dataValues.distance
-          }
-        },
-        product: {
-          brand: listing.gasBrand.name,
-          size: listing.size,
-          price: parseFloat(listing.selling_price),
-          cylinder_condition: listing.cylinder_condition
-        },
-        delivery: {
-          available: listing.delivery_available,
-          fee: listing.delivery_fee ? parseFloat(listing.delivery_fee) : 0
-        }
-      }));
-
-      res.json({
-        success: true,
-        search_location: {
-          latitude: userLat,
-          longitude: userLon
-        },
-        search_radius: radiusKm,
-        filters: {
-          brand_id: brand_id || 'any',
-          size: size || 'any',
-          price_range: {
-            min: min_price || 'any',
-            max: max_price || 'any'
-          }
-        },
-        total_results: formattedListings.length,
-        results: formattedListings
-      });
-
-    } catch (error) {
-      console.error('❌ Error searching agents by location:', error);
-      res.status(500).json({
+    );
+    
+    if (updated === 0) {
+      return res.status(404).json({
         success: false,
-        message: 'Failed to search agents',
-        error: error.message
+        message: 'User not found'
       });
     }
-  };
+    
+    res.json({
+      success: true,
+      message: 'Location deleted successfully',
+      timestamps: {
+        deleted_at: new Date().toISOString()
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error deleting user location:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete location',
+      error: error.message
+    });
+  }
+};
+
+// Verify if user has location
+exports.verifyLocation = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    console.log('📍 Verifying location for user:', userId);
+    
+    const user = await db.User.findByPk(userId, {
+      attributes: ['latitude', 'longitude']
+    });
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    const hasLocation = user.latitude !== null && user.longitude !== null;
+    
+    res.json({
+      success: true,
+      hasLocation: hasLocation,
+      isComplete: hasLocation && user.latitude !== 0 && user.longitude !== 0,
+      coordinates: hasLocation ? {
+        latitude: user.latitude,
+        longitude: user.longitude
+      } : null
+    });
+    
+  } catch (error) {
+    console.error('Error verifying location:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to verify location',
+      error: error.message
+    });
+  }
+};
+
+// Get only coordinates
+exports.getCoordinates = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    console.log('📍 Getting coordinates for user:', userId);
+    
+    const user = await db.User.findByPk(userId, {
+      attributes: ['latitude', 'longitude']
+    });
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    const hasLocation = user.latitude !== null && user.longitude !== null;
+    
+    if (!hasLocation) {
+      return res.status(404).json({
+        success: false,
+        message: 'No coordinates found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      coordinates: {
+        latitude: user.latitude,
+        longitude: user.longitude
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error getting coordinates:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get coordinates',
+      error: error.message
+    });
+  }
+};
+
+// Get only address details
+exports.getAddress = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    console.log('📍 Getting address for user:', userId);
+    
+    const user = await db.User.findByPk(userId, {
+      attributes: ['area_name', 'town', 'county', 'address']
+    });
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    // Check if any address field exists
+    const hasAddress = user.area_name || user.town || user.county || user.address;
+    
+    if (!hasAddress) {
+      return res.status(404).json({
+        success: false,
+        message: 'No address details found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      address: {
+        area_name: user.area_name,
+        town: user.town,
+        county: user.county,
+        address: user.address
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error getting address:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get address',
+      error: error.message
+    });
+  }
+};
+
+// Set location from map (with validation)
+exports.setLocationFromMap = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { latitude, longitude, address, place_name } = req.body;
+    
+    console.log('📍 [MAP] Setting location from map for user:', userId, {
+      latitude,
+      longitude,
+      place_name
+    });
+    
+    // Validate required fields
+    if (!latitude || !longitude) {
+      return res.status(400).json({
+        success: false,
+        message: 'Latitude and longitude are required'
+      });
+    }
+    
+    // Parse coordinates
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    
+    if (isNaN(lat) || isNaN(lng)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid coordinates'
+      });
+    }
+    
+    // Update user
+    const updateData = {
+      latitude: lat,
+      longitude: lng,
+      updated_at: new Date()
+    };
+    
+    // Try to extract area/town from place_name or address
+    if (place_name) {
+      // Simple parsing - you might want to improve this
+      const parts = place_name.split(',').map(p => p.trim());
+      if (parts.length > 0) {
+        updateData.area_name = parts[0];
+      }
+      if (parts.length > 1) {
+        updateData.town = parts[1];
+      }
+    }
+    
+    if (address) {
+      updateData.address = address;
+    }
+    
+    const [updated] = await db.User.update(updateData, {
+      where: { id: userId }
+    });
+    
+    if (updated === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    // Get updated user
+    const updatedUser = await db.User.findByPk(userId, {
+      attributes: ['latitude', 'longitude', 'area_name', 'town', 'county', 'address']
+    });
+    
+    res.json({
+      success: true,
+      message: 'Location set from map successfully',
+      location: {
+        latitude: updatedUser.latitude,
+        longitude: updatedUser.longitude,
+        area_name: updatedUser.area_name,
+        town: updatedUser.town,
+        county: updatedUser.county,
+        address: updatedUser.address
+      },
+      map_data: {
+        place_name,
+        address
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error setting location from map:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to set location from map',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Helper function to validate coordinates
+function validateCoordinates(latitude, longitude) {
+  try {
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    
+    if (isNaN(lat) || isNaN(lng)) {
+      return { valid: false, message: 'Invalid coordinates format. Must be numbers.' };
+    }
+    
+    // Validate coordinate ranges
+    if (lat < -90 || lat > 90) {
+      return { valid: false, message: 'Latitude must be between -90 and 90 degrees' };
+    }
+    
+    if (lng < -180 || lng > 180) {
+      return { valid: false, message: 'Longitude must be between -180 and 180 degrees' };
+    }
+    
+    // Validate for Kenya (approximate coordinates)
+    if (lat < -5 || lat > 5 || lng < 33 || lng > 42) {
+      console.warn(`Warning: Coordinates (${lat}, ${lng}) are outside typical Kenya range`);
+    }
+    
+    return { valid: true, lat, lng };
+    
+  } catch (error) {
+    return { valid: false, message: 'Invalid coordinates format' };
+  }
 }
-
-module.exports = new LocationController();

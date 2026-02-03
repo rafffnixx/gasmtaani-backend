@@ -684,6 +684,254 @@ class OrderController {
     }
   };
 
+  // Add these methods to your OrderController class in orderController.js
+
+// 8. Get order statistics for agent dashboard
+getAgentOrderStats = async (req, res) => {
+  try {
+    if (req.user.user_type !== 'agent') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only agents can view dashboard stats'
+      });
+    }
+
+    const agentId = req.user.id;
+
+    console.log(`📊 Getting order stats for agent: ${agentId}`);
+
+    // Get counts for different statuses
+    const totalOrders = await db.Order.count({
+      where: { agent_id: agentId }
+    });
+
+    const pendingOrders = await db.Order.count({
+      where: {
+        agent_id: agentId,
+        status: 'pending'
+      }
+    });
+
+    const confirmedOrders = await db.Order.count({
+      where: {
+        agent_id: agentId,
+        status: 'confirmed'
+      }
+    });
+
+    const processingOrders = await db.Order.count({
+      where: {
+        agent_id: agentId,
+        status: 'processing'
+      }
+    });
+
+    const deliveredOrders = await db.Order.count({
+      where: {
+        agent_id: agentId,
+        status: 'delivered'
+      }
+    });
+
+    // Calculate total revenue from delivered orders
+    const revenueResult = await db.Order.findOne({
+      attributes: [
+        [db.Sequelize.fn('SUM', db.Sequelize.col('grand_total')), 'total_revenue']
+      ],
+      where: {
+        agent_id: agentId,
+        status: 'delivered'
+      },
+      raw: true
+    });
+
+    const totalRevenue = revenueResult?.total_revenue || 0;
+
+    // Get today's orders count
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const todaysOrders = await db.Order.count({
+      where: {
+        agent_id: agentId,
+        created_at: {
+          [db.Sequelize.Op.gte]: today,
+          [db.Sequelize.Op.lt]: tomorrow
+        }
+      }
+    });
+
+    // Get pending deliveries (orders that need to be delivered today)
+    const pendingDeliveries = await db.Order.count({
+      where: {
+        agent_id: agentId,
+        status: ['confirmed', 'processing', 'shipped'],
+        estimated_delivery_time: {
+          [db.Sequelize.Op.lt]: tomorrow,
+          [db.Sequelize.Op.gte]: today
+        }
+      }
+    });
+
+    console.log(`✅ Found ${totalOrders} total orders for agent ${agentId}`);
+
+    res.json({
+      success: true,
+      stats: {
+        totalOrders,
+        pendingOrders,
+        confirmedOrders,
+        processingOrders,
+        deliveredOrders,
+        totalRevenue: parseFloat(totalRevenue),
+        todaysOrders,
+        pendingDeliveries
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error getting agent order stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get order statistics',
+      error: error.message
+    });
+  }
+};
+
+// 9. Get recent orders for agent dashboard (with optional limit)
+getAgentRecentOrders = async (req, res) => {
+  try {
+    if (req.user.user_type !== 'agent') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only agents can view recent orders'
+      });
+    }
+
+    const agentId = req.user.id;
+    const limit = parseInt(req.query.limit) || 5;
+
+    console.log(`📋 Getting ${limit} recent orders for agent: ${agentId}`);
+
+    const orders = await db.Order.findAll({
+      where: { agent_id: agentId },
+      include: [
+        {
+          model: db.AgentGasListing,
+          as: 'listing',
+          attributes: ['id', 'size'],
+          include: [{
+            model: db.GasBrand,
+            as: 'brand',
+            attributes: ['id', 'name', 'logo_url']
+          }]
+        },
+        {
+          model: db.User,
+          as: 'customer',
+          attributes: ['id', 'full_name', 'phone_number']
+        }
+      ],
+      order: [['created_at', 'DESC']],
+      limit: limit
+    });
+
+    const formattedOrders = orders.map(order => ({
+      id: order.id,
+      order_number: order.order_number,
+      product: {
+        brand: order.listing?.brand?.name || 'Gas Brand',
+        size: order.listing?.size,
+        image: order.listing?.brand?.logo_url
+      },
+      customer: {
+        id: order.customer?.id,
+        name: order.customer?.full_name || 'Customer',
+        phone: order.customer?.phone_number
+      },
+      quantity: order.quantity,
+      total_price: parseFloat(order.total_price),
+      delivery_fee: parseFloat(order.delivery_fee),
+      grand_total: parseFloat(order.grand_total),
+      status: order.status,
+      payment_status: order.payment_status,
+      created_at: order.created_at
+    }));
+
+    console.log(`✅ Found ${formattedOrders.length} recent orders`);
+
+    res.json({
+      success: true,
+      count: formattedOrders.length,
+      orders: formattedOrders
+    });
+
+  } catch (error) {
+    console.error('❌ Error getting recent orders:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get recent orders',
+      error: error.message
+    });
+  }
+};
+
+// 10. Get all orders for agent (with pagination and filtering) - ALIAS for /api/orders/agent
+// This is already in your code as getAgentOrders, but you need to make sure the route is correct
+
+// 11. Get order status summary for agent
+getOrderStatusSummary = async (req, res) => {
+  try {
+    if (req.user.user_type !== 'agent') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only agents can view order summary'
+      });
+    }
+
+    const agentId = req.user.id;
+
+    console.log(`📈 Getting order status summary for agent: ${agentId}`);
+
+    const orders = await db.Order.findAll({
+      where: { agent_id: agentId },
+      attributes: ['status']
+    });
+
+    const statusCounts = orders.reduce((acc, order) => {
+      acc[order.status] = (acc[order.status] || 0) + 1;
+      return acc;
+    }, {});
+
+    const summary = {
+      pending: statusCounts.pending || 0,
+      confirmed: statusCounts.confirmed || 0,
+      processing: statusCounts.processing || 0,
+      shipped: statusCounts.shipped || 0,
+      delivered: statusCounts.delivered || 0,
+      cancelled: statusCounts.cancelled || 0,
+      rejected: statusCounts.rejected || 0
+    };
+
+    res.json({
+      success: true,
+      summary: summary,
+      total: orders.length
+    });
+
+  } catch (error) {
+    console.error('❌ Error getting order summary:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get order summary',
+      error: error.message
+    });
+  }
+};
+
   // 7. Add rating and review (Customer only, after delivery)
   addRating = async (req, res) => {
     try {

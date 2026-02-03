@@ -1,4 +1,4 @@
-﻿// server.js - FIXED VERSION with correct imports
+﻿// server.js - CORRECTED VERSION
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -55,18 +55,19 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// ROUTES IMPORT - FIXED IMPORTS
+// ROUTES IMPORT - CORRECTED IMPORTS
 // ============================================================
 
-// Import routes - USE THE CORRECT FILE NAMES
+// Import routes
 const authRoutes = require('./src/routes/auth.routes');
-const productRoutes = require('./src/routes/products.routes'); // Changed to 'products.routes'
+const productRoutes = require('./src/routes/products.routes');
 const orderRoutes = require('./src/routes/order.routes');
-const locationRoutes = require('./src/routes/location.routes'); // Add this
+const locationRoutes = require('./src/routes/location.routes');
 const cartRoutes = require('./src/routes/cart.routes');
-// ADD THESE TWO LINES:
-const agentRoutes = require('./src/routes/agents.routes'); // For authenticated agent endpoints
-const agentsRoutes = require('./src/routes/agents.routes'); // For public agents endpoints
+
+// CORRECT AGENT ROUTES IMPORT - IMPORTANT FIX HERE
+const agentsPublicRoutes = require('./src/routes/agents.routes'); // For PUBLIC routes (customers)
+const agentDashboardRoutes = require('./src/routes/agent.routes'); // For AUTHENTICATED routes (agent dashboard)
 
 // ============================================================
 // ROUTES
@@ -93,15 +94,24 @@ app.get('/', (req, res) => {
         search: 'GET /api/products/search?query=... - Search products',
         details: 'GET /api/products/:id - Get product details'
       },
-      agent: {
-        my_listings: 'GET /api/products/agent/listings - Get agent listings',
-        create_listing: 'POST /api/products/agent/listings - Create listing',
-        update_listing: 'PUT /api/products/agent/listings/:id - Update listing',
-        delete_listing: 'DELETE /api/products/agent/listings/:id - Delete listing'
-      },
-      agents: {  // ADD THIS SECTION
+      // ======= PUBLIC AGENT ROUTES (for customers) =======
+      agents: {
         nearby: 'GET /api/agents/nearby?lat&lng&radius - Find nearby agents',
-        by_brand: 'GET /api/agents/brand/:brandId - Get agents by brand'
+        by_brand: 'GET /api/agents/brand/:brandId - Get agents by brand',
+        brands_with_counts: 'GET /api/agents/brands-with-agent-counts - Get brands with agent counts',
+        update_location: 'PUT /api/agents/update-location - Update user location (auth required)'
+      },
+      // ======= AUTHENTICATED AGENT ROUTES (agent dashboard) =======
+      agent: {
+        dashboard_stats: 'GET /api/agent/dashboard/stats - Agent dashboard stats',
+        earnings_stats: 'GET /api/agent/earnings/stats - Agent earnings stats',
+        recent_orders: 'GET /api/agent/orders/recent - Recent orders',
+        profile: 'GET /api/agent/profile - Get agent profile',
+        orders: 'GET /api/agent/orders - Get agent orders',
+        products: 'GET /api/agent/products - Get agent products',
+        earnings: 'GET /api/agent/earnings - Get agent earnings',
+        notifications: 'GET /api/agent/notifications - Get notifications',
+        support_tickets: 'GET /api/agent/support/tickets - Get support tickets'
       },
       orders: {
         place_order: 'POST /api/orders - Place order',
@@ -111,6 +121,16 @@ app.get('/', (req, res) => {
         update_status: 'PUT /api/orders/agent/:id/status - Update status',
         cancel_order: 'PUT /api/orders/customer/:id/cancel - Cancel order',
         add_rating: 'POST /api/orders/:id/rating - Add rating'
+      },
+      location: {
+        update_location: 'PUT /api/location/update - Update user location'
+      },
+      cart: {
+        get_cart: 'GET /api/cart - Get cart items',
+        add_item: 'POST /api/cart/items - Add item to cart',
+        update_item: 'PUT /api/cart/items/:id - Update cart item',
+        remove_item: 'DELETE /api/cart/items/:id - Remove from cart',
+        clear_cart: 'DELETE /api/cart/clear - Clear cart'
       },
       system: {
         health: 'GET /health - System health check',
@@ -124,11 +144,12 @@ app.get('/', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
-app.use('/api/location', locationRoutes); // Add this
+app.use('/api/location', locationRoutes);
 app.use('/api/cart', cartRoutes);
-// ADD THESE TWO LINES:
-app.use('/api/agent', agentRoutes); // For authenticated agent endpoints
-app.use('/api/agents', agentsRoutes); // For public agents endpoints
+
+// CORRECT AGENT ROUTES - IMPORTANT FIX HERE
+app.use('/api/agents', agentsPublicRoutes); // For PUBLIC agent routes (customers can access)
+app.use('/api/agent', agentDashboardRoutes); // For AUTHENTICATED agent routes (agent dashboard)
 
 // Test route
 app.get('/api/test', (req, res) => {
@@ -139,10 +160,10 @@ app.get('/api/test', (req, res) => {
       auth: '/api/auth/*',
       products: '/api/products/*',
       orders: '/api/orders/*',
-      agent: '/api/agent/*',
-      agents: '/api/agents/*',
       location: '/api/location/*',
-      cart: '/api/cart/*'
+      cart: '/api/cart/*',
+      agents: '/api/agents/* (public)',
+      agent: '/api/agent/* (authenticated)'
     }
   });
 });
@@ -173,7 +194,7 @@ app.get('/health', async (req, res) => {
   res.status(statusCode).json(healthcheck);
 });
 
-// 404 handler - UPDATE THIS TOO
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -183,10 +204,10 @@ app.use((req, res) => {
       auth: '/api/auth/*',
       products: '/api/products/*',
       orders: '/api/orders/*',
-      agent: '/api/agent/*',
-      agents: '/api/agents/*',
       location: '/api/location/*',
       cart: '/api/cart/*',
+      agents: '/api/agents/* (public agent routes)',
+      agent: '/api/agent/* (authenticated agent routes)',
       health: '/health',
       docs: '/'
     }
@@ -228,8 +249,9 @@ const startServer = async () => {
       console.log('👉 POST /api/auth/verify/step2      - Verify + choose role');
       console.log('👉 POST /api/auth/login             - Login');
       console.log('👉 GET  /api/products/gas-brands    - Get gas brands');
-      console.log('👉 GET  /api/agents/nearby          - Find nearby agents');
-      console.log('👉 GET  /api/agent/profile          - Get agent profile');
+      console.log('👉 GET  /api/agents/nearby          - Find nearby agents (Public)');
+      console.log('👉 GET  /api/agents/brands-with-agent-counts - Get brands with agent counts');
+      console.log('👉 GET  /api/agent/profile          - Get agent profile (Authenticated)');
       console.log('👉 GET  /api/health                 - Health check');
       console.log('='.repeat(70));
       console.log('\n\x1b[32m✅ Server ready!\x1b[0m\n');
