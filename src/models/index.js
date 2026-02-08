@@ -163,6 +163,43 @@ if (db.UserLocation) {
   });
 }
 
+// 7. PAYMENT ASSOCIATIONS (NEW)
+if (db.Payment) {
+  // Payment belongs to Order
+  db.Payment.belongsTo(db.Order, {
+    foreignKey: 'order_id',
+    as: 'order'
+  });
+  
+  // Payment belongs to Customer (User)
+  db.Payment.belongsTo(db.User, {
+    foreignKey: 'customer_id',
+    as: 'customer'
+  });
+  
+  // Payment belongs to Agent (User)
+  db.Payment.belongsTo(db.User, {
+    foreignKey: 'agent_id',
+    as: 'agent'
+  });
+  
+  // Reverse associations
+  db.Order.hasMany(db.Payment, {
+    foreignKey: 'order_id',
+    as: 'payments'
+  });
+  
+  db.User.hasMany(db.Payment, {
+    foreignKey: 'customer_id',
+    as: 'customerPayments'
+  });
+  
+  db.User.hasMany(db.Payment, {
+    foreignKey: 'agent_id',
+    as: 'agentPayments'
+  });
+}
+
 // ============================================
 // VIRTUAL ASSOCIATIONS FOR CART TO AGENT
 // ============================================
@@ -174,9 +211,38 @@ if (db.Cart && db.AgentGasListing) {
     targetKey: 'id',
     // We'll set this up through a custom getter in the model or a join query
   });
+}
+
+// ============================================
+// ADD PAYMENT METHODS TO ORDER MODEL (Optional but recommended)
+// ============================================
+if (db.Order) {
+  // Add payment reference field to Order model
+  // This should ideally be done via migration, but for quick setup:
   
-  // To get agent_id, we can add a getter method to the Cart model
-  // But for simplicity, we'll handle it in queries with includes
+  // Method to get latest payment for order
+  db.Order.prototype.getLatestPayment = async function() {
+    return await db.Payment.findOne({
+      where: { order_id: this.id },
+      order: [['created_at', 'DESC']]
+    });
+  };
+  
+  // Method to check if order is paid
+  db.Order.prototype.isPaid = function() {
+    return this.payment_status === 'paid';
+  };
+  
+  // Method to create payment for this order
+  db.Order.prototype.createPayment = async function(paymentData) {
+    return await db.Payment.create({
+      ...paymentData,
+      order_id: this.id,
+      customer_id: this.customer_id,
+      agent_id: this.agent_id,
+      amount: this.grand_total
+    });
+  };
 }
 
 // ============================================
@@ -186,6 +252,7 @@ if (db.Cart && db.AgentGasListing) {
 // - Order.js
 // - AgentGasListing.js
 // - Cart.js
+// - Payment.js (if you added one)
 // - Any other model files that have associate() methods
 
 // ============================================
@@ -223,6 +290,13 @@ async function syncModels() {
       console.log('✅ User -> Cart association: as: "cartItems"');
     }
     
+    if (db.Payment) {
+      console.log('✅ Payment model loaded');
+      console.log('✅ Payment -> Order association: as: "order"');
+      console.log('✅ Payment -> User (customer) association: as: "customer"');
+      console.log('✅ Payment -> User (agent) association: as: "agent"');
+    }
+    
   } catch (error) {
     console.error('❌ Error syncing models:', error);
   }
@@ -231,14 +305,10 @@ async function syncModels() {
 // Uncomment to sync on startup (for development)
 // syncModels();
 
-// ============================================
-// IMPORTANT: UPDATE YOUR orderController.js
-// ============================================
-// After updating this file, you MUST also update orderController.js:
-// 1. Line 33: Change as: 'gasBrand' to as: 'brand'
-// 2. Lines 141 & 192: Add as: 'listing' to AgentGasListing include
-
 db.sequelize = sequelize;
 db.Sequelize = Sequelize;
 
 module.exports = db;
+
+
+

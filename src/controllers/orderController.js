@@ -34,6 +34,7 @@ class OrderController {
 
       console.log(`🛒 Placing order for customer: ${customerId}`);
       console.log(`📦 Listing ID: ${listing_id}, Quantity: ${quantity}`);
+      console.log(`💰 Payment method: ${payment_method}`);
 
       // Validate listing exists and is available
       const listing = await db.AgentGasListing.findByPk(listing_id, {
@@ -80,6 +81,21 @@ class OrderController {
         });
       }
 
+      // Check if item exists in cart
+      const cartItem = await db.Cart.findOne({
+        where: {
+          customer_id: customerId,
+          listing_id: listing_id
+        }
+      });
+
+      if (!cartItem) {
+        return res.status(400).json({
+          success: false,
+          message: 'Item not found in cart. Please add to cart first.'
+        });
+      }
+
       // Calculate amounts
       const unitPrice = parseFloat(listing.selling_price);
       const deliveryFee = listing.delivery_available ? parseFloat(listing.delivery_fee) : 0;
@@ -94,6 +110,31 @@ class OrderController {
 
       // Generate order number
       const orderNumber = this.generateOrderNumber();
+
+      // 🔴 CRITICAL: Determine order status based on payment method
+      let orderStatus = 'pending';
+      let shouldReduceStock = true;
+      let paymentStatus = 'pending';
+      
+      if (payment_method === 'mpesa') {
+        // For M-Pesa: Wait for payment verification
+        orderStatus = 'pending_payment';
+        shouldReduceStock = false;
+        paymentStatus = 'pending';
+        console.log('⚠️ M-Pesa payment: Order in pending_payment state');
+      } else if (payment_method === 'cash' || payment_method === 'cash_on_delivery') {
+        // For cash: Order is pending (waiting agent confirmation)
+        orderStatus = 'pending';
+        shouldReduceStock = true;
+        paymentStatus = 'pending';
+        console.log('💰 Cash payment: Order pending agent confirmation');
+      } else if (payment_method === 'card' || payment_method === 'wallet') {
+        // For card/wallet: Assume immediate payment
+        orderStatus = 'pending';
+        shouldReduceStock = true;
+        paymentStatus = 'paid';
+        console.log('💳 Card/Wallet: Order pending agent confirmation');
+      }
 
       // Create order
       const order = await db.Order.create({
@@ -111,32 +152,43 @@ class OrderController {
         delivery_longitude: delivery_longitude,
         customer_notes: delivery_notes,
         payment_method: payment_method === 'cash_on_delivery' ? 'cash' : payment_method,
-        status: 'pending',
-        payment_status: 'pending'
+        status: orderStatus,
+        payment_status: paymentStatus
       });
 
-      // Update listing quantity
-      await listing.update({
-        available_quantity: listing.available_quantity - quantity
-      });
+      // 🔴 Only reduce stock for immediate payments
+      if (shouldReduceStock) {
+        await listing.update({
+          available_quantity: listing.available_quantity - quantity
+        });
+        console.log(`📦 Reduced listing quantity by ${quantity}`);
+      } else {
+        console.log(`⚠️ Listing quantity NOT reduced (waiting for payment verification)`);
+      }
 
-      // Update total orders on listing
+      // Always update total orders count (for analytics)
       await listing.increment('total_orders');
+
+      // Remove item from cart
+      await db.Cart.destroy({
+        where: {
+          customer_id: customerId,
+          listing_id: listing_id
+        }
+      });
 
       console.log(`✅ Order placed successfully! Order #: ${orderNumber}`);
       console.log(`💰 Total: KES ${grandTotal}`);
+      console.log(`📦 Order status: ${orderStatus}`);
+      console.log(`🛒 Cart item cleared for listing: ${listing_id}`);
 
-      // Get fresh data for response to ensure associations are loaded
+      // Get fresh data for response
       const freshOrder = await db.Order.findByPk(order.id, {
         include: [
           {
             model: db.AgentGasListing,
             as: 'listing',
-            include: [{
-              model: db.GasBrand,
-              as: 'brand',
-              attributes: ['id', 'name']
-            }]
+            attributes: ['id', 'size', 'cylinder_condition']
           },
           {
             model: db.User,
@@ -151,14 +203,18 @@ class OrderController {
         ]
       });
 
-      // Get customer details
       const customer = await db.User.findByPk(customerId, {
         attributes: ['id', 'full_name', 'phone_number']
       });
 
       const response = {
         success: true,
-        message: 'Order placed successfully',
+        message: payment_method === 'mpesa' 
+          ? 'Order created. Please complete M-Pesa payment to confirm.' 
+          : payment_method === 'cash' || payment_method === 'cash_on_delivery'
+            ? 'Order placed. Payment will be collected on delivery.'
+            : 'Order placed successfully',
+        requires_payment: payment_method === 'mpesa',
         order: {
           id: freshOrder.id,
           order_number: freshOrder.order_number,
@@ -173,7 +229,7 @@ class OrderController {
             phone: freshOrder.agent?.phone_number
           },
           product: {
-            brand: freshOrder.listing?.brand?.name || 'Gas Brand',
+            brand: 'Gas Brand',
             size: freshOrder.listing?.size,
             cylinder_condition: freshOrder.listing?.cylinder_condition
           },
@@ -232,12 +288,7 @@ class OrderController {
           {
             model: db.AgentGasListing,
             as: 'listing',
-            attributes: ['id', 'size'],
-            include: [{
-              model: db.GasBrand,
-              as: 'brand',
-              attributes: ['id', 'name', 'logo_url']
-            }]
+            attributes: ['id', 'size']
           },
           {
             model: db.User,
@@ -254,9 +305,7 @@ class OrderController {
         id: order.id,
         order_number: order.order_number,
         product: {
-          brand: order.listing?.brand?.name || 'Gas Brand',
-          size: order.listing?.size,
-          image: order.listing?.brand?.logo_url
+          size: order.listing?.size
         },
         agent: {
           id: order.agent?.id,
@@ -328,11 +377,6 @@ class OrderController {
             model: db.AgentGasListing,
             as: 'listing',
             attributes: ['id', 'size'],
-            include: [{
-              model: db.GasBrand,
-              as: 'brand',
-              attributes: ['id', 'name', 'logo_url']
-            }]
           },
           {
             model: db.User,
@@ -349,9 +393,7 @@ class OrderController {
         id: order.id,
         order_number: order.order_number,
         product: {
-          brand: order.listing?.brand?.name || 'Gas Brand',
-          size: order.listing?.size,
-          image: order.listing?.brand?.logo_url
+          size: order.listing?.size
         },
         customer: {
           id: order.customer?.id,
@@ -431,18 +473,26 @@ class OrderController {
         });
       }
 
+      // Check if order is in pending_payment (shouldn't be confirmed by agent)
+      if (order.status === 'pending_payment') {
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot update order status. Payment not verified yet.'
+        });
+      }
+
       // Validate status transition
       const validTransitions = {
         pending: ['confirmed', 'rejected', 'cancelled'],
         confirmed: ['processing', 'cancelled'],
-        processing: ['shipped', 'cancelled'],
-        shipped: ['delivered'],
-        delivered: [], // Terminal state
-        cancelled: [], // Terminal state
-        rejected: [] // Terminal state
+        processing: ['dispatched', 'cancelled'],
+        dispatched: ['delivered'],
+        delivered: [],
+        cancelled: [],
+        rejected: []
       };
 
-      if (!validTransitions[order.status].includes(status)) {
+      if (!validTransitions[order.status] || !validTransitions[order.status].includes(status)) {
         return res.status(400).json({
           success: false,
           message: `Cannot change status from ${order.status} to ${status}`
@@ -520,7 +570,7 @@ class OrderController {
       }
 
       // Check if order can be cancelled
-      const cancellableStatuses = ['pending', 'confirmed'];
+      const cancellableStatuses = ['pending', 'pending_payment', 'confirmed'];
       if (!cancellableStatuses.includes(order.status)) {
         return res.status(400).json({
           success: false,
@@ -534,8 +584,8 @@ class OrderController {
         cancellation_reason: cancellation_reason
       });
 
-      // Return quantity to listing if order was confirmed
-      if (order.status === 'confirmed' && order.AgentGasListing) {
+      // Return quantity to listing if order was confirmed (and stock was reduced)
+      if (order.status === 'confirmed' && order.AgentGasListing && order.payment_status === 'paid') {
         await db.AgentGasListing.increment('available_quantity', {
           by: order.quantity,
           where: { id: order.AgentGasListing.id }
@@ -587,7 +637,6 @@ class OrderController {
       } else if (userType === 'agent') {
         whereCondition.agent_id = userId;
       }
-      // Admin can see any order
 
       const order = await db.Order.findOne({
         where: whereCondition,
@@ -595,12 +644,7 @@ class OrderController {
           {
             model: db.AgentGasListing,
             as: 'listing',
-            attributes: ['id', 'size', 'cylinder_condition'],
-            include: [{
-              model: db.GasBrand,
-              as: 'brand',
-              attributes: ['id', 'name', 'logo_url', 'description']
-            }]
+            attributes: ['id', 'size', 'cylinder_condition']
           },
           {
             model: db.User,
@@ -641,11 +685,8 @@ class OrderController {
             profile_image: order.agent.profile_image
           },
           product: {
-            brand: order.listing.brand.name,
             size: order.listing.size,
-            cylinder_condition: order.listing.cylinder_condition,
-            image: order.listing.brand.logo_url,
-            description: order.listing.brand.description
+            cylinder_condition: order.listing.cylinder_condition
           },
           quantity: order.quantity,
           unit_price: parseFloat(order.unit_price),
@@ -684,255 +725,244 @@ class OrderController {
     }
   };
 
-  // Add these methods to your OrderController class in orderController.js
+  // 7. Get order statistics for agent dashboard
+  getAgentOrderStats = async (req, res) => {
+    try {
+      if (req.user.user_type !== 'agent') {
+        return res.status(403).json({
+          success: false,
+          message: 'Only agents can view dashboard stats'
+        });
+      }
 
-// 8. Get order statistics for agent dashboard
-getAgentOrderStats = async (req, res) => {
-  try {
-    if (req.user.user_type !== 'agent') {
-      return res.status(403).json({
-        success: false,
-        message: 'Only agents can view dashboard stats'
+      const agentId = req.user.id;
+
+      console.log(`📊 Getting order stats for agent: ${agentId}`);
+
+      // Get counts for different statuses
+      const totalOrders = await db.Order.count({
+        where: { agent_id: agentId }
       });
-    }
 
-    const agentId = req.user.id;
-
-    console.log(`📊 Getting order stats for agent: ${agentId}`);
-
-    // Get counts for different statuses
-    const totalOrders = await db.Order.count({
-      where: { agent_id: agentId }
-    });
-
-    const pendingOrders = await db.Order.count({
-      where: {
-        agent_id: agentId,
-        status: 'pending'
-      }
-    });
-
-    const confirmedOrders = await db.Order.count({
-      where: {
-        agent_id: agentId,
-        status: 'confirmed'
-      }
-    });
-
-    const processingOrders = await db.Order.count({
-      where: {
-        agent_id: agentId,
-        status: 'processing'
-      }
-    });
-
-    const deliveredOrders = await db.Order.count({
-      where: {
-        agent_id: agentId,
-        status: 'delivered'
-      }
-    });
-
-    // Calculate total revenue from delivered orders
-    const revenueResult = await db.Order.findOne({
-      attributes: [
-        [db.Sequelize.fn('SUM', db.Sequelize.col('grand_total')), 'total_revenue']
-      ],
-      where: {
-        agent_id: agentId,
-        status: 'delivered'
-      },
-      raw: true
-    });
-
-    const totalRevenue = revenueResult?.total_revenue || 0;
-
-    // Get today's orders count
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    const todaysOrders = await db.Order.count({
-      where: {
-        agent_id: agentId,
-        created_at: {
-          [db.Sequelize.Op.gte]: today,
-          [db.Sequelize.Op.lt]: tomorrow
+      const pendingOrders = await db.Order.count({
+        where: {
+          agent_id: agentId,
+          status: 'pending'
         }
-      }
-    });
-
-    // Get pending deliveries (orders that need to be delivered today)
-    const pendingDeliveries = await db.Order.count({
-      where: {
-        agent_id: agentId,
-        status: ['confirmed', 'processing', 'shipped'],
-        estimated_delivery_time: {
-          [db.Sequelize.Op.lt]: tomorrow,
-          [db.Sequelize.Op.gte]: today
-        }
-      }
-    });
-
-    console.log(`✅ Found ${totalOrders} total orders for agent ${agentId}`);
-
-    res.json({
-      success: true,
-      stats: {
-        totalOrders,
-        pendingOrders,
-        confirmedOrders,
-        processingOrders,
-        deliveredOrders,
-        totalRevenue: parseFloat(totalRevenue),
-        todaysOrders,
-        pendingDeliveries
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error getting agent order stats:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get order statistics',
-      error: error.message
-    });
-  }
-};
-
-// 9. Get recent orders for agent dashboard (with optional limit)
-getAgentRecentOrders = async (req, res) => {
-  try {
-    if (req.user.user_type !== 'agent') {
-      return res.status(403).json({
-        success: false,
-        message: 'Only agents can view recent orders'
       });
-    }
 
-    const agentId = req.user.id;
-    const limit = parseInt(req.query.limit) || 5;
+      const confirmedOrders = await db.Order.count({
+        where: {
+          agent_id: agentId,
+          status: 'confirmed'
+        }
+      });
 
-    console.log(`📋 Getting ${limit} recent orders for agent: ${agentId}`);
+      const processingOrders = await db.Order.count({
+        where: {
+          agent_id: agentId,
+          status: 'processing'
+        }
+      });
 
-    const orders = await db.Order.findAll({
-      where: { agent_id: agentId },
-      include: [
-        {
-          model: db.AgentGasListing,
-          as: 'listing',
-          attributes: ['id', 'size'],
-          include: [{
-            model: db.GasBrand,
-            as: 'brand',
-            attributes: ['id', 'name', 'logo_url']
-          }]
+      const deliveredOrders = await db.Order.count({
+        where: {
+          agent_id: agentId,
+          status: 'delivered'
+        }
+      });
+
+      // Calculate total revenue from delivered orders
+      const revenueResult = await db.Order.findOne({
+        attributes: [
+          [db.Sequelize.fn('SUM', db.Sequelize.col('grand_total')), 'total_revenue']
+        ],
+        where: {
+          agent_id: agentId,
+          status: 'delivered'
         },
-        {
-          model: db.User,
-          as: 'customer',
-          attributes: ['id', 'full_name', 'phone_number']
+        raw: true
+      });
+
+      const totalRevenue = revenueResult?.total_revenue || 0;
+
+      // Get today's orders count
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      const todaysOrders = await db.Order.count({
+        where: {
+          agent_id: agentId,
+          created_at: {
+            [db.Sequelize.Op.gte]: today,
+            [db.Sequelize.Op.lt]: tomorrow
+          }
         }
-      ],
-      order: [['created_at', 'DESC']],
-      limit: limit
-    });
+      });
 
-    const formattedOrders = orders.map(order => ({
-      id: order.id,
-      order_number: order.order_number,
-      product: {
-        brand: order.listing?.brand?.name || 'Gas Brand',
-        size: order.listing?.size,
-        image: order.listing?.brand?.logo_url
-      },
-      customer: {
-        id: order.customer?.id,
-        name: order.customer?.full_name || 'Customer',
-        phone: order.customer?.phone_number
-      },
-      quantity: order.quantity,
-      total_price: parseFloat(order.total_price),
-      delivery_fee: parseFloat(order.delivery_fee),
-      grand_total: parseFloat(order.grand_total),
-      status: order.status,
-      payment_status: order.payment_status,
-      created_at: order.created_at
-    }));
+      // Get pending deliveries (orders that need to be delivered today)
+      const pendingDeliveries = await db.Order.count({
+        where: {
+          agent_id: agentId,
+          status: ['confirmed', 'processing', 'dispatched'],
+          estimated_delivery_time: {
+            [db.Sequelize.Op.lt]: tomorrow,
+            [db.Sequelize.Op.gte]: today
+          }
+        }
+      });
 
-    console.log(`✅ Found ${formattedOrders.length} recent orders`);
+      console.log(`✅ Found ${totalOrders} total orders for agent ${agentId}`);
 
-    res.json({
-      success: true,
-      count: formattedOrders.length,
-      orders: formattedOrders
-    });
+      res.json({
+        success: true,
+        stats: {
+          totalOrders,
+          pendingOrders,
+          confirmedOrders,
+          processingOrders,
+          deliveredOrders,
+          totalRevenue: parseFloat(totalRevenue),
+          todaysOrders,
+          pendingDeliveries
+        }
+      });
 
-  } catch (error) {
-    console.error('❌ Error getting recent orders:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get recent orders',
-      error: error.message
-    });
-  }
-};
-
-// 10. Get all orders for agent (with pagination and filtering) - ALIAS for /api/orders/agent
-// This is already in your code as getAgentOrders, but you need to make sure the route is correct
-
-// 11. Get order status summary for agent
-getOrderStatusSummary = async (req, res) => {
-  try {
-    if (req.user.user_type !== 'agent') {
-      return res.status(403).json({
+    } catch (error) {
+      console.error('❌ Error getting agent order stats:', error);
+      res.status(500).json({
         success: false,
-        message: 'Only agents can view order summary'
+        message: 'Failed to get order statistics',
+        error: error.message
       });
     }
+  };
 
-    const agentId = req.user.id;
+  // 8. Get recent orders for agent dashboard
+  getAgentRecentOrders = async (req, res) => {
+    try {
+      if (req.user.user_type !== 'agent') {
+        return res.status(403).json({
+          success: false,
+          message: 'Only agents can view recent orders'
+        });
+      }
 
-    console.log(`📈 Getting order status summary for agent: ${agentId}`);
+      const agentId = req.user.id;
+      const limit = parseInt(req.query.limit) || 5;
 
-    const orders = await db.Order.findAll({
-      where: { agent_id: agentId },
-      attributes: ['status']
-    });
+      console.log(`📋 Getting ${limit} recent orders for agent: ${agentId}`);
 
-    const statusCounts = orders.reduce((acc, order) => {
-      acc[order.status] = (acc[order.status] || 0) + 1;
-      return acc;
-    }, {});
+      const orders = await db.Order.findAll({
+        where: { agent_id: agentId },
+        include: [
+          {
+            model: db.AgentGasListing,
+            as: 'listing',
+            attributes: ['id', 'size']
+          },
+          {
+            model: db.User,
+            as: 'customer',
+            attributes: ['id', 'full_name', 'phone_number']
+          }
+        ],
+        order: [['created_at', 'DESC']],
+        limit: limit
+      });
 
-    const summary = {
-      pending: statusCounts.pending || 0,
-      confirmed: statusCounts.confirmed || 0,
-      processing: statusCounts.processing || 0,
-      shipped: statusCounts.shipped || 0,
-      delivered: statusCounts.delivered || 0,
-      cancelled: statusCounts.cancelled || 0,
-      rejected: statusCounts.rejected || 0
-    };
+      const formattedOrders = orders.map(order => ({
+        id: order.id,
+        order_number: order.order_number,
+        product: {
+          size: order.listing?.size
+        },
+        customer: {
+          id: order.customer?.id,
+          name: order.customer?.full_name || 'Customer',
+          phone: order.customer?.phone_number
+        },
+        quantity: order.quantity,
+        total_price: parseFloat(order.total_price),
+        delivery_fee: parseFloat(order.delivery_fee),
+        grand_total: parseFloat(order.grand_total),
+        status: order.status,
+        payment_status: order.payment_status,
+        created_at: order.created_at
+      }));
 
-    res.json({
-      success: true,
-      summary: summary,
-      total: orders.length
-    });
+      console.log(`✅ Found ${formattedOrders.length} recent orders`);
 
-  } catch (error) {
-    console.error('❌ Error getting order summary:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get order summary',
-      error: error.message
-    });
-  }
-};
+      res.json({
+        success: true,
+        count: formattedOrders.length,
+        orders: formattedOrders
+      });
 
-  // 7. Add rating and review (Customer only, after delivery)
+    } catch (error) {
+      console.error('❌ Error getting recent orders:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to get recent orders',
+        error: error.message
+      });
+    }
+  };
+
+  // 9. Get order status summary for agent
+  getOrderStatusSummary = async (req, res) => {
+    try {
+      if (req.user.user_type !== 'agent') {
+        return res.status(403).json({
+          success: false,
+          message: 'Only agents can view order summary'
+        });
+      }
+
+      const agentId = req.user.id;
+
+      console.log(`📈 Getting order status summary for agent: ${agentId}`);
+
+      const orders = await db.Order.findAll({
+        where: { agent_id: agentId },
+        attributes: ['status']
+      });
+
+      const statusCounts = orders.reduce((acc, order) => {
+        acc[order.status] = (acc[order.status] || 0) + 1;
+        return acc;
+      }, {});
+
+      const summary = {
+        pending_payment: statusCounts.pending_payment || 0,
+        pending: statusCounts.pending || 0,
+        confirmed: statusCounts.confirmed || 0,
+        processing: statusCounts.processing || 0,
+        dispatched: statusCounts.dispatched || 0,
+        delivered: statusCounts.delivered || 0,
+        cancelled: statusCounts.cancelled || 0,
+        rejected: statusCounts.rejected || 0
+      };
+
+      res.json({
+        success: true,
+        summary: summary,
+        total: orders.length
+      });
+
+    } catch (error) {
+      console.error('❌ Error getting order summary:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to get order summary',
+        error: error.message
+      });
+    }
+  };
+
+  // 10. Add rating and review (Customer only, after delivery)
   addRating = async (req, res) => {
     try {
       if (req.user.user_type !== 'customer') {
