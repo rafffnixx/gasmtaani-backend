@@ -1,4 +1,6 @@
+// orderController.js
 const db = require('../models');
+const { Op } = require('sequelize');
 
 class OrderController {
   // Helper: Generate unique order number
@@ -111,25 +113,22 @@ class OrderController {
       // Generate order number
       const orderNumber = this.generateOrderNumber();
 
-      // 🔴 CRITICAL: Determine order status based on payment method
+      // Determine order status based on payment method
       let orderStatus = 'pending';
       let shouldReduceStock = true;
       let paymentStatus = 'pending';
       
       if (payment_method === 'mpesa') {
-        // For M-Pesa: Wait for payment verification
         orderStatus = 'pending_payment';
         shouldReduceStock = false;
         paymentStatus = 'pending';
         console.log('⚠️ M-Pesa payment: Order in pending_payment state');
       } else if (payment_method === 'cash' || payment_method === 'cash_on_delivery') {
-        // For cash: Order is pending (waiting agent confirmation)
         orderStatus = 'pending';
         shouldReduceStock = true;
         paymentStatus = 'pending';
         console.log('💰 Cash payment: Order pending agent confirmation');
       } else if (payment_method === 'card' || payment_method === 'wallet') {
-        // For card/wallet: Assume immediate payment
         orderStatus = 'pending';
         shouldReduceStock = true;
         paymentStatus = 'paid';
@@ -156,7 +155,7 @@ class OrderController {
         payment_status: paymentStatus
       });
 
-      // 🔴 Only reduce stock for immediate payments
+      // Only reduce stock for immediate payments
       if (shouldReduceStock) {
         await listing.update({
           available_quantity: listing.available_quantity - quantity
@@ -229,7 +228,7 @@ class OrderController {
             phone: freshOrder.agent?.phone_number
           },
           product: {
-            brand: 'Gas Brand',
+            brand: freshOrder.listing?.brand?.name || 'Gas Brand',
             size: freshOrder.listing?.size,
             cylinder_condition: freshOrder.listing?.cylinder_condition
           },
@@ -247,7 +246,6 @@ class OrderController {
         }
       };
 
-      // TODO: Send notification to agent
       console.log(`📱 Notification would be sent to agent: ${freshOrder.agent?.phone_number}`);
 
       res.status(201).json(response);
@@ -288,7 +286,12 @@ class OrderController {
           {
             model: db.AgentGasListing,
             as: 'listing',
-            attributes: ['id', 'size']
+            attributes: ['id', 'size'],
+            include: [{
+              model: db.GasBrand,
+              as: 'brand',
+              attributes: ['name', 'logo_url']
+            }]
           },
           {
             model: db.User,
@@ -305,7 +308,9 @@ class OrderController {
         id: order.id,
         order_number: order.order_number,
         product: {
-          size: order.listing?.size
+          brand: order.listing?.brand?.name,
+          size: order.listing?.size,
+          brand_logo: order.listing?.brand?.logo_url
         },
         agent: {
           id: order.agent?.id,
@@ -377,6 +382,11 @@ class OrderController {
             model: db.AgentGasListing,
             as: 'listing',
             attributes: ['id', 'size'],
+            include: [{
+              model: db.GasBrand,
+              as: 'brand',
+              attributes: ['name', 'logo_url']
+            }]
           },
           {
             model: db.User,
@@ -393,7 +403,9 @@ class OrderController {
         id: order.id,
         order_number: order.order_number,
         product: {
-          size: order.listing?.size
+          brand: order.listing?.brand?.name,
+          size: order.listing?.size,
+          brand_logo: order.listing?.brand?.logo_url
         },
         customer: {
           id: order.customer?.id,
@@ -507,14 +519,35 @@ class OrderController {
       // Set actual delivery time if status is delivered
       if (status === 'delivered') {
         updateData.actual_delivery_time = new Date();
+        
+        // Update wallet balance when order is delivered
+        try {
+          const [wallet] = await db.Wallet.findOrCreate({
+            where: { user_id: agentId },
+            defaults: { balance: 0, user_id: agentId }
+          });
+          
+          await wallet.increment('balance', { by: parseFloat(order.grand_total) });
+          
+          await db.WalletTransaction.create({
+            wallet_id: wallet.id,
+            user_id: agentId,
+            amount: order.grand_total,
+            type: 'credit',
+            reference: `ORDER_${order.order_number}`,
+            description: `Payment for order #${order.order_number}`,
+            status: 'completed'
+          });
+          
+          console.log(`💰 Wallet updated with KES ${order.grand_total}`);
+        } catch (walletError) {
+          console.log('Wallet update failed:', walletError.message);
+        }
       }
 
       await order.update(updateData);
 
       console.log(`✅ Order ${order_id} status updated to: ${status}`);
-
-      // TODO: Send notification to customer
-      console.log(`📱 Notification would be sent to customer: ${order.customer?.phone_number}`);
 
       res.json({
         success: true,
@@ -595,9 +628,6 @@ class OrderController {
 
       console.log(`✅ Order ${order_id} cancelled successfully`);
 
-      // TODO: Send notification to agent
-      console.log('📱 Notification would be sent to agent');
-
       res.json({
         success: true,
         message: 'Order cancelled successfully',
@@ -644,7 +674,12 @@ class OrderController {
           {
             model: db.AgentGasListing,
             as: 'listing',
-            attributes: ['id', 'size', 'cylinder_condition']
+            attributes: ['id', 'size', 'cylinder_condition'],
+            include: [{
+              model: db.GasBrand,
+              as: 'brand',
+              attributes: ['name', 'logo_url']
+            }]
           },
           {
             model: db.User,
@@ -685,8 +720,10 @@ class OrderController {
             profile_image: order.agent.profile_image
           },
           product: {
-            size: order.listing.size,
-            cylinder_condition: order.listing.cylinder_condition
+            brand: order.listing?.brand?.name,
+            size: order.listing?.size,
+            cylinder_condition: order.listing?.cylinder_condition,
+            brand_logo: order.listing?.brand?.logo_url
           },
           quantity: order.quantity,
           unit_price: parseFloat(order.unit_price),
@@ -765,10 +802,24 @@ class OrderController {
         }
       });
 
+      const dispatchedOrders = await db.Order.count({
+        where: {
+          agent_id: agentId,
+          status: 'dispatched'
+        }
+      });
+
       const deliveredOrders = await db.Order.count({
         where: {
           agent_id: agentId,
           status: 'delivered'
+        }
+      });
+
+      const cancelledOrders = await db.Order.count({
+        where: {
+          agent_id: agentId,
+          status: 'cancelled'
         }
       });
 
@@ -779,7 +830,8 @@ class OrderController {
         ],
         where: {
           agent_id: agentId,
-          status: 'delivered'
+          status: 'delivered',
+          payment_status: 'paid'
         },
         raw: true
       });
@@ -796,20 +848,20 @@ class OrderController {
         where: {
           agent_id: agentId,
           created_at: {
-            [db.Sequelize.Op.gte]: today,
-            [db.Sequelize.Op.lt]: tomorrow
+            [Op.gte]: today,
+            [Op.lt]: tomorrow
           }
         }
       });
 
-      // Get pending deliveries (orders that need to be delivered today)
+      // Get pending deliveries
       const pendingDeliveries = await db.Order.count({
         where: {
           agent_id: agentId,
           status: ['confirmed', 'processing', 'dispatched'],
           estimated_delivery_time: {
-            [db.Sequelize.Op.lt]: tomorrow,
-            [db.Sequelize.Op.gte]: today
+            [Op.lt]: tomorrow,
+            [Op.gte]: today
           }
         }
       });
@@ -823,7 +875,9 @@ class OrderController {
           pendingOrders,
           confirmedOrders,
           processingOrders,
+          dispatchedOrders,
           deliveredOrders,
+          cancelledOrders,
           totalRevenue: parseFloat(totalRevenue),
           todaysOrders,
           pendingDeliveries
@@ -861,7 +915,12 @@ class OrderController {
           {
             model: db.AgentGasListing,
             as: 'listing',
-            attributes: ['id', 'size']
+            attributes: ['id', 'size'],
+            include: [{
+              model: db.GasBrand,
+              as: 'brand',
+              attributes: ['name', 'logo_url']
+            }]
           },
           {
             model: db.User,
@@ -877,7 +936,9 @@ class OrderController {
         id: order.id,
         order_number: order.order_number,
         product: {
-          size: order.listing?.size
+          brand: order.listing?.brand?.name,
+          size: order.listing?.size,
+          brand_logo: order.listing?.brand?.logo_url
         },
         customer: {
           id: order.customer?.id,
@@ -885,9 +946,10 @@ class OrderController {
           phone: order.customer?.phone_number
         },
         quantity: order.quantity,
+        unit_price: parseFloat(order.unit_price),
         total_price: parseFloat(order.total_price),
-        delivery_fee: parseFloat(order.delivery_fee),
         grand_total: parseFloat(order.grand_total),
+        delivery_fee: parseFloat(order.delivery_fee),
         status: order.status,
         payment_status: order.payment_status,
         created_at: order.created_at
@@ -943,13 +1005,15 @@ class OrderController {
         dispatched: statusCounts.dispatched || 0,
         delivered: statusCounts.delivered || 0,
         cancelled: statusCounts.cancelled || 0,
-        rejected: statusCounts.rejected || 0
+        rejected: statusCounts.rejected || 0,
+        total: orders.length
       };
+
+      console.log(`✅ Summary for agent ${agentId}:`, summary);
 
       res.json({
         success: true,
-        summary: summary,
-        total: orders.length
+        summary: summary
       });
 
     } catch (error) {

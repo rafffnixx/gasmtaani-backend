@@ -66,6 +66,7 @@ const cartRoutes = require('./src/routes/cart.routes');
 const paymentRoutes = require('./src/routes/payment.routes');
 const agentsPublicRoutes = require('./src/routes/agents.routes');
 const agentDashboardRoutes = require('./src/routes/agent.routes');
+const earningsRoutes = require('./src/routes/earnings.routes');
 
 // ============================================================
 // ROUTES - SINGLE DEFINITION
@@ -149,6 +150,7 @@ app.use('/api/cart', cartRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/agents', agentsPublicRoutes);
 app.use('/api/agent', agentDashboardRoutes);
+app.use('/api/earnings', earningsRoutes);
 
 // ✅ TEST ROUTE
 app.get('/api/test', (req, res) => {
@@ -166,6 +168,101 @@ app.get('/api/test', (req, res) => {
       payments: '/api/payments/*'
     }
   });
+});
+
+// ============================================================
+// DEBUG ROUTES - FIXED VERSION (No ? in path)
+// ============================================================
+
+// Debug: Get all users (limit 10)
+app.get('/api/debug/users', async (req, res) => {
+  try {
+    const users = await db.User.findAll({
+      attributes: ['id', 'email', 'full_name', 'user_type', 'is_verified', 'is_active', 'business_name'],
+      limit: 10
+    });
+    
+    res.json({
+      success: true,
+      users: users,
+      count: users.length,
+      note: 'Debug endpoint - remove in production'
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Debug: Get user by ID
+app.get('/api/debug/user/:userId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    
+    const user = await db.User.findByPk(userId, {
+      attributes: ['id', 'email', 'full_name', 'user_type', 'is_verified', 'is_active', 'business_name']
+    });
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    res.json({
+      success: true,
+      user: user,
+      note: 'Debug endpoint - remove in production'
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Debug: Make user an agent
+app.post('/api/debug/make-agent/:userId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    
+    const user = await db.User.findByPk(userId);
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    await user.update({ 
+      user_type: 'agent',
+      is_verified: true,
+      is_active: true
+    });
+    
+    res.json({
+      success: true,
+      message: `User ${userId} is now an agent`,
+      user: {
+        id: user.id,
+        email: user.email,
+        user_type: user.user_type
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Debug: Check database tables
+app.get('/api/debug/tables', async (req, res) => {
+  try {
+    const tables = await db.sequelize.query(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+      { type: db.sequelize.QueryTypes.SELECT }
+    );
+    
+    res.json({
+      success: true,
+      tables: tables.map(t => t.table_name || t.TABLE_NAME),
+      count: tables.length
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // ✅ PAYMENT TEST ROUTE
@@ -299,6 +396,9 @@ const startServer = async () => {
       console.log('👉 GET  /api/products/gas-brands    - Get gas brands');
       console.log('👉 GET  /api/agents/nearby          - Find nearby agents');
       console.log('👉 GET  /api/health                 - Health check');
+      console.log('👉 GET  /api/debug/users            - List users (debug)');
+      console.log('👉 GET  /api/debug/user/:id         - Get user by ID (debug)');
+      console.log('👉 POST /api/debug/make-agent/:id   - Make user agent (debug)');
       console.log('='.repeat(70));
       console.log('\n\x1b[32m✅ Server ready!\x1b[0m\n');
     });
