@@ -10,11 +10,19 @@ module.exports = (sequelize) => {
     },
     user_id: {
       type: DataTypes.INTEGER,
-      allowNull: false
+      allowNull: false,
+      references: {
+        model: 'users',
+        key: 'id'
+      }
     },
     gas_brand_id: {
       type: DataTypes.INTEGER,
-      allowNull: false
+      allowNull: false,
+      references: {
+        model: 'gas_brands',
+        key: 'id'
+      }
     }
   }, {
     tableName: 'user_gas_brands',
@@ -23,5 +31,6 @@ module.exports = (sequelize) => {
     updatedAt: 'updated_at'
   });
 
+  // No associate method here - associations will be defined in index.js
   return UserGasBrand;
 };

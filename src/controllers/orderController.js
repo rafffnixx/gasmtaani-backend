@@ -838,11 +838,16 @@ class OrderController {
 
       const totalRevenue = revenueResult?.total_revenue || 0;
 
-      // Get today's orders count
+      // FIXED: Get today's orders count - use proper date objects
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const tomorrow = new Date(today);
       tomorrow.setDate(tomorrow.getDate() + 1);
+
+      console.log('📅 Today range:', { 
+        from: today.toISOString(), 
+        to: tomorrow.toISOString() 
+      });
 
       const todaysOrders = await db.Order.count({
         where: {
@@ -854,14 +859,14 @@ class OrderController {
         }
       });
 
-      // Get pending deliveries
+      // FIXED: Get pending deliveries - use same date objects
       const pendingDeliveries = await db.Order.count({
         where: {
           agent_id: agentId,
           status: ['confirmed', 'processing', 'dispatched'],
           estimated_delivery_time: {
-            [Op.lt]: tomorrow,
-            [Op.gte]: today
+            [Op.gte]: today,
+            [Op.lt]: tomorrow
           }
         }
       });
