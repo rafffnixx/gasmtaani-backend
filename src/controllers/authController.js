@@ -2,9 +2,7 @@
 const jwt = require('jsonwebtoken');
 const { validationResult } = require('express-validator');
 const db = require('../models');
-const nodemailer = require('nodemailer');
 const emailService = require('../services/emailService');
-
 
 // Console styling
 const consoleStyle = {
@@ -87,575 +85,312 @@ class AuthController {
   };
 
   // ============================================================================
-  // NEW: REGISTRATION WITH EMAIL VERIFICATION - NO USER CREATED YET
+  // STEP 1: SEND VERIFICATION CODE - USING SELF-HOSTED MAIL SERVER
   // ============================================================================
-
-  /**
-/**
- * 📝 STEP 1: SEND VERIFICATION CODE - NO USER CREATED
- */
-// ============================================================================
-// SEND VERIFICATION CODE - WITH GOOGLE APPS SCRIPT (100% WORKING)
-// ============================================================================
-// ============================================================================
-// SEND VERIFICATION CODE - WITH GOOGLE APPS SCRIPT (100% WORKING)
-// Using: rafffnixx@gmail.com
-// ============================================================================
-sendVerificationCode = async (req, res) => {
-  console.log('\n' + '='.repeat(80));
-  console.log(consoleStyle.header, '📧 SEND VERIFICATION CODE');
-  console.log(consoleStyle.time, `📅 Time: ${formatKenyaTime(new Date())}`);
-  console.log('='.repeat(80));
-  
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const { email, phone_number, full_name, password } = req.body;
-
-    console.log(consoleStyle.info, '📦 Registration Request:');
-    console.log(consoleStyle.data, `   Email: ${email}`);
-    console.log(consoleStyle.data, `   Phone: ${phone_number}`);
-    console.log(consoleStyle.data, `   Name: ${full_name || 'Not provided'}`);
-
-    // Validate password
-    if (password.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: 'Password must be at least 6 characters'
-      });
-    }
-
-    // Normalize phone
-    const normalizedPhone = this.normalizePhoneNumber(phone_number);
-    console.log(consoleStyle.data, `   Normalized: ${normalizedPhone}`);
-
-    // Check if user already exists
-    const existingUser = await db.User.findOne({
-      where: {
-        [db.Sequelize.Op.or]: [
-          { email },
-          { phone_number: normalizedPhone }
-        ]
-      }
-    });
-
-    if (existingUser) {
-      console.log(consoleStyle.error, '❌ User already exists!');
-      return res.status(400).json({
-        success: false,
-        message: 'User with this email or phone already exists'
-      });
-    }
-
-    // Generate verification code
-    const code = this.generateVerificationCode();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-    // Initialize global temp storage
-    if (!global.tempRegistrations) {
-      global.tempRegistrations = new Map();
-    }
-
-    // Create unique verification ID
-    const verificationId = `ver_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    
-    // Store verification data in memory
-    global.tempRegistrations.set(verificationId, {
-      email,
-      phone_number: normalizedPhone,
-      full_name: full_name || null,
-      password_hash: password,
-      code,
-      expires_at: expiresAt,
-      is_used: false,
-      attempts: 0,
-      created_at: new Date()
-    });
-
-    console.log(consoleStyle.success, '✅ Verification record created in memory!');
-    
-    // ============================================================
-    // LOG CODE TO TERMINAL - ALWAYS VISIBLE
-    // ============================================================
-    console.log('\n' + '\x1b[43m\x1b[30m%s\x1b[0m', '🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔');
-    console.log('\x1b[43m\x1b[30m%s\x1b[0m', '🔔                                                🔔');
-    console.log('\x1b[43m\x1b[30m%s\x1b[0m', '🔔         📧 VERIFICATION CODE GENERATED          🔔');
-    console.log('\x1b[43m\x1b[30m%s\x1b[0m', '🔔                                                🔔');
-    console.log('\x1b[43m\x1b[30m%s\x1b[0m', '🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔');
-    console.log('\x1b[33m%s\x1b[0m', '='.repeat(60));
-    console.log('\x1b[33m%s\x1b[0m', '   📋 REGISTRATION DETAILS:');
-    console.log('\x1b[33m%s\x1b[0m', '='.repeat(60));
-    console.log('\x1b[36m%s\x1b[0m', `   👤 Name: ${full_name || 'Not provided'}`);
-    console.log('\x1b[36m%s\x1b[0m', `   📧 Email: ${email}`);
-    console.log('\x1b[36m%s\x1b[0m', `   📞 Phone: ${phone_number}`);
-    console.log('\x1b[36m%s\x1b[0m', `   🔑 Normalized: ${normalizedPhone}`);
-    console.log('\x1b[32m%s\x1b[0m', `   🔢 VERIFICATION CODE: ${code}`);
-    console.log('\x1b[34m%s\x1b[0m', `   ⏰ Expires: ${formatKenyaTime(expiresAt)}`);
-    console.log('\x1b[33m%s\x1b[0m', '='.repeat(60));
-    console.log('\x1b[33m%s\x1b[0m', '   ⚠️  USER NOT CREATED YET - VERIFICATION REQUIRED');
-    console.log('\x1b[33m%s\x1b[0m', '='.repeat(60));
-
-    // ============================================================
-    // SEND EMAIL USING GOOGLE APPS SCRIPT - 100% WORKS
-    // ============================================================
-    let emailSent = false;
+  sendVerificationCode = async (req, res) => {
+    console.log('\n' + '='.repeat(80));
+    console.log(consoleStyle.header, '📧 SEND VERIFICATION CODE');
+    console.log(consoleStyle.time, `📅 Time: ${formatKenyaTime(new Date())}`);
+    console.log('='.repeat(80));
     
     try {
-      const axios = require('axios');
-      
-      // 👇 PASTE YOUR GOOGLE APPS SCRIPT URL HERE
-      const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec';
-      
-      // Beautiful HTML email template
-      const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <style>
-            body {
-              font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-              line-height: 1.6;
-              color: #333333;
-              margin: 0;
-              padding: 0;
-              background-color: #f4f4f4;
-            }
-            .container {
-              max-width: 600px;
-              margin: 20px auto;
-              background-color: #ffffff;
-              border-radius: 16px;
-              overflow: hidden;
-              box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-            }
-            .header {
-              background: linear-gradient(135deg, #FF6B35 0%, #FF8E53 100%);
-              padding: 40px 30px;
-              text-align: center;
-            }
-            .header h1 {
-              color: white;
-              margin: 0;
-              font-size: 32px;
-              font-weight: 700;
-              letter-spacing: 1px;
-            }
-            .header p {
-              color: rgba(255,255,255,0.9);
-              margin: 10px 0 0;
-              font-size: 16px;
-            }
-            .content {
-              padding: 40px 30px;
-              background-color: #ffffff;
-            }
-            .welcome-text {
-              text-align: center;
-              margin-bottom: 30px;
-            }
-            .welcome-text h2 {
-              color: #FF6B35;
-              margin: 0 0 10px;
-              font-size: 24px;
-            }
-            .code-container {
-              background: linear-gradient(145deg, #f8f9fa, #ffffff);
-              border: 3px dashed #FF6B35;
-              border-radius: 20px;
-              padding: 30px;
-              margin: 30px 0;
-              text-align: center;
-              box-shadow: 0 5px 15px rgba(255,107,53,0.1);
-            }
-            .code-label {
-              color: #666;
-              font-size: 14px;
-              text-transform: uppercase;
-              letter-spacing: 2px;
-              margin-bottom: 10px;
-            }
-            .code {
-              font-size: 48px;
-              font-weight: 800;
-              letter-spacing: 12px;
-              color: #FF6B35;
-              font-family: 'Courier New', monospace;
-              background: #f8f9fa;
-              padding: 15px 20px;
-              border-radius: 12px;
-              display: inline-block;
-            }
-            .expiry {
-              text-align: center;
-              background: #f8f9fa;
-              padding: 15px;
-              border-radius: 12px;
-              margin: 20px 0;
-              color: #666;
-            }
-            .expiry strong {
-              color: #FF6B35;
-            }
-            .details-box {
-              background: #FFF9E6;
-              border-left: 4px solid #FF6B35;
-              padding: 20px;
-              border-radius: 8px;
-              margin: 25px 0;
-            }
-            .details-box p {
-              margin: 8px 0;
-              color: #555;
-            }
-            .footer {
-              background-color: #f8f9fa;
-              padding: 30px;
-              text-align: center;
-              border-top: 1px solid #e9ecef;
-            }
-            .footer p {
-              margin: 5px 0;
-              color: #888;
-              font-size: 12px;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>⚡ Mtaani Gas</h1>
-              <p>Futuristic Gas Delivery</p>
-            </div>
-            
-            <div class="content">
-              <div class="welcome-text">
-                <h2>Welcome to Mtaani Gas! 👋</h2>
-                <p style="color: #666; font-size: 16px;">Your trusted partner for gas delivery</p>
-              </div>
-              
-              <p style="font-size: 16px;">Hello <strong style="color: #FF6B35;">${full_name || email}</strong>,</p>
-              
-              <p style="font-size: 16px; color: #555;">
-                Thank you for choosing Mtaani Gas. To complete your registration, 
-                please use the verification code below:
-              </p>
-              
-              <div class="code-container">
-                <div class="code-label">Verification Code</div>
-                <div class="code">${code}</div>
-              </div>
-              
-              <div class="expiry">
-                <span style="font-size: 16px;">⏰ This code expires in <strong>10 minutes</strong></span>
-              </div>
-              
-              <div class="details-box">
-                <p style="margin-top: 0; font-weight: 600; color: #FF6B35;">📝 Registration Summary</p>
-                <p><strong>Name:</strong> ${full_name || 'Not provided'}</p>
-                <p><strong>Email:</strong> ${email}</p>
-                <p><strong>Phone:</strong> ${phone_number}</p>
-              </div>
-              
-              <p style="color: #666; font-style: italic; margin-top: 25px;">
-                "Bringing convenience to your doorstep, one cylinder at a time."
-              </p>
-            </div>
-            
-            <div class="footer">
-              <p style="font-size: 14px; color: #FF6B35; font-weight: 600;">Mtaani Gas - Your Neighborhood Gas Partner</p>
-              <p style="margin-top: 15px;">📧 Sent via rafffnixx@gmail.com</p>
-              <p style="margin-top: 20px;">
-                <small>
-                  This is an automated message from Mtaani Gas.<br>
-                  © ${new Date().getFullYear()} Mtaani Gas. All rights reserved.
-                </small>
-              </p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `;
-
-      const text = `
-        WELCOME TO MTAANI GAS!
-        
-        Hello ${full_name || email},
-        
-        Your verification code is: ${code}
-        
-        This code will expire in 10 minutes.
-        
-        Registration Details:
-        • Name: ${full_name || 'Not provided'}
-        • Email: ${email}
-        • Phone: ${phone_number}
-        
-        © ${new Date().getFullYear()} Mtaani Gas. All rights reserved.
-      `;
-
-      // Send via Google Apps Script
-      const response = await axios.post(APPS_SCRIPT_URL, {
-        to: email,
-        subject: '🔐 Verify Your Mtaani Gas Account',
-        html: html,
-        text: text
-      });
-
-      if (response.data.success) {
-        emailSent = true;
-        console.log(consoleStyle.success, `✅ Verification email sent to ${email} via Google Apps Script`);
-        console.log(consoleStyle.info, `   📧 From: rafffnixx@gmail.com`);
-        console.log(consoleStyle.info, `   📧 To: ${email}`);
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors: errors.array()
+        });
       }
 
-    } catch (emailError) {
-      console.log(consoleStyle.warning, '⚠️ Google Apps Script email failed:');
-      console.log(consoleStyle.data, `   Error: ${emailError.message}`);
-      console.log(consoleStyle.data, `   Code available in terminal: ${code}`);
-    }
+      const { email, phone_number, full_name, password } = req.body;
 
-    // Return success - NO USER CREATED YET
-    res.json({
-      success: true,
-      message: emailSent 
-        ? 'Verification code sent successfully. Please check your email.'
-        : 'Verification code generated. Please check terminal for the code.',
-      requires_verification: true,
-      verification_id: verificationId,
-      expires_at: expiresAt,
-      email: email,
-      phone: phone_number,
-      code: process.env.NODE_ENV === 'development' ? code : undefined
-    });
+      console.log(consoleStyle.info, '📦 Registration Request:');
+      console.log(consoleStyle.data, `   Email: ${email}`);
+      console.log(consoleStyle.data, `   Phone: ${phone_number}`);
+      console.log(consoleStyle.data, `   Name: ${full_name || 'Not provided'}`);
 
-  } catch (error) {
-    console.log(consoleStyle.error, '🔥 Send verification error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to send verification code. Please try again.',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-  /**
-   * ✅ STEP 2: VERIFY CODE AND CREATE USER
-   */
-/**
- * ✅ STEP 2: VERIFY CODE AND CREATE USER
- * FIXED: Uses in-memory storage instead of database
- */
-/**
- * ✅ STEP 2: VERIFY CODE AND CREATE USER WITH SELECTED ROLE
- */
-verifyCodeAndCreateUser = async (req, res) => {
-  console.log('\n' + '='.repeat(80));
-  console.log(consoleStyle.header, '✅ VERIFY CODE & CREATE USER');
-  console.log(consoleStyle.time, `📅 Time: ${formatKenyaTime(new Date())}`);
-  console.log('='.repeat(80));
-  
-  try {
-    const { email, code, role } = req.body; // ✅ Get role from request
-
-    if (!email || !code) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email and verification code are required'
-      });
-    }
-
-    if (!role) {
-      return res.status(400).json({
-        success: false,
-        message: 'User role is required'
-      });
-    }
-
-    if (!['customer', 'agent'].includes(role)) {
-      return res.status(400).json({
-        success: false,
-        message: 'User role must be "customer" or "agent"'
-      });
-    }
-
-    console.log(consoleStyle.info, '📦 Verification Request:');
-    console.log(consoleStyle.data, `   Email: ${email}`);
-    console.log(consoleStyle.data, `   Code: ${code}`);
-    console.log(consoleStyle.data, `   Role: ${role}`); // ✅ Log the role
-
-    // Check in-memory storage
-    if (!global.tempRegistrations) {
-      global.tempRegistrations = new Map();
-      console.log(consoleStyle.error, '❌ No verification records found');
-      return res.status(400).json({
-        success: false,
-        message: 'No verification code found. Please request a new one.',
-        can_resend: true
-      });
-    }
-
-    // Find the verification record by email and code
-    let verificationRecord = null;
-    let verificationId = null;
-
-    for (const [id, record] of global.tempRegistrations.entries()) {
-      if (record.email === email && record.code === code && !record.is_used) {
-        verificationRecord = record;
-        verificationId = id;
-        break;
+      if (password.length < 6) {
+        return res.status(400).json({
+          success: false,
+          message: 'Password must be at least 6 characters'
+        });
       }
-    }
 
-    if (!verificationRecord) {
-      console.log(consoleStyle.error, '❌ Invalid verification code');
-      return res.status(400).json({
+      const normalizedPhone = this.normalizePhoneNumber(phone_number);
+      console.log(consoleStyle.data, `   Normalized: ${normalizedPhone}`);
+
+      const existingUser = await db.User.findOne({
+        where: {
+          [db.Sequelize.Op.or]: [
+            { email },
+            { phone_number: normalizedPhone }
+          ]
+        }
+      });
+
+      if (existingUser) {
+        console.log(consoleStyle.error, '❌ User already exists!');
+        return res.status(400).json({
+          success: false,
+          message: 'User with this email or phone already exists'
+        });
+      }
+
+      const code = this.generateVerificationCode();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+      if (!global.tempRegistrations) {
+        global.tempRegistrations = new Map();
+      }
+
+      const verificationId = `ver_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+      
+      global.tempRegistrations.set(verificationId, {
+        email,
+        phone_number: normalizedPhone,
+        full_name: full_name || null,
+        password_hash: password,
+        code,
+        expires_at: expiresAt,
+        is_used: false,
+        attempts: 0,
+        created_at: new Date()
+      });
+
+      console.log(consoleStyle.success, '✅ Verification record created in memory!');
+      
+      // Log code to terminal
+      console.log('\n' + '\x1b[43m\x1b[30m%s\x1b[0m', '🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔');
+      console.log('\x1b[43m\x1b[30m%s\x1b[0m', '🔔         📧 VERIFICATION CODE GENERATED          🔔');
+      console.log('\x1b[43m\x1b[30m%s\x1b[0m', '🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔');
+      console.log('\x1b[33m%s\x1b[0m', `   🔢 VERIFICATION CODE: ${code}`);
+      console.log('\x1b[33m%s\x1b[0m', '='.repeat(60));
+      console.log('\x1b[33m%s\x1b[0m', '   ⚠️  USER NOT CREATED YET - VERIFICATION REQUIRED');
+      console.log('\x1b[33m%s\x1b[0m', '='.repeat(60));
+
+      // Send email using self-hosted mail server
+      let emailSent = false;
+      
+      try {
+        const emailResult = await emailService.sendVerificationEmail(email, code, full_name);
+        
+        if (emailResult.success) {
+          emailSent = true;
+          console.log(consoleStyle.success, `✅ Verification email sent to ${email}`);
+          console.log(consoleStyle.info, `   📧 From: it@masaigroup.co.ke`);
+          console.log(consoleStyle.info, `   📧 Message ID: ${emailResult.messageId}`);
+        } else {
+          console.log(consoleStyle.warning, `⚠️ Email failed: ${emailResult.error}`);
+        }
+      } catch (emailError) {
+        console.log(consoleStyle.warning, '⚠️ Email sending failed:', emailError.message);
+      }
+
+      res.json({
+        success: true,
+        message: emailSent 
+          ? 'Verification code sent successfully. Please check your email.'
+          : 'Verification code generated. Please check terminal for the code.',
+        requires_verification: true,
+        verification_id: verificationId,
+        expires_at: expiresAt,
+        email: email,
+        phone: phone_number,
+        code: process.env.NODE_ENV === 'development' ? code : undefined
+      });
+
+    } catch (error) {
+      console.log(consoleStyle.error, '🔥 Send verification error:', error);
+      res.status(500).json({
         success: false,
-        message: 'Invalid verification code. Please try again.',
-        can_resend: true
+        message: 'Failed to send verification code. Please try again.',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
+  };
 
-    // Check if expired
-    if (new Date() > verificationRecord.expires_at) {
-      console.log(consoleStyle.error, '⏰ Verification code expired');
+  // ============================================================================
+  // STEP 2: VERIFY CODE AND CREATE USER WITH SELECTED ROLE
+  // ============================================================================
+  verifyCodeAndCreateUser = async (req, res) => {
+    console.log('\n' + '='.repeat(80));
+    console.log(consoleStyle.header, '✅ VERIFY CODE & CREATE USER');
+    console.log(consoleStyle.time, `📅 Time: ${formatKenyaTime(new Date())}`);
+    console.log('='.repeat(80));
+    
+    try {
+      const { email, code, role } = req.body;
+
+      if (!email || !code) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email and verification code are required'
+        });
+      }
+
+      if (!role) {
+        return res.status(400).json({
+          success: false,
+          message: 'User role is required'
+        });
+      }
+
+      if (!['customer', 'agent'].includes(role)) {
+        return res.status(400).json({
+          success: false,
+          message: 'User role must be "customer" or "agent"'
+        });
+      }
+
+      console.log(consoleStyle.info, '📦 Verification Request:');
+      console.log(consoleStyle.data, `   Email: ${email}`);
+      console.log(consoleStyle.data, `   Code: ${code}`);
+      console.log(consoleStyle.data, `   Role: ${role}`);
+
+      if (!global.tempRegistrations) {
+        global.tempRegistrations = new Map();
+        console.log(consoleStyle.error, '❌ No verification records found');
+        return res.status(400).json({
+          success: false,
+          message: 'No verification code found. Please request a new one.',
+          can_resend: true
+        });
+      }
+
+      let verificationRecord = null;
+      let verificationId = null;
+
+      for (const [id, record] of global.tempRegistrations.entries()) {
+        if (record.email === email && record.code === code && !record.is_used) {
+          verificationRecord = record;
+          verificationId = id;
+          break;
+        }
+      }
+
+      if (!verificationRecord) {
+        console.log(consoleStyle.error, '❌ Invalid verification code');
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid verification code. Please try again.',
+          can_resend: true
+        });
+      }
+
+      if (new Date() > verificationRecord.expires_at) {
+        console.log(consoleStyle.error, '⏰ Verification code expired');
+        verificationRecord.is_used = true;
+        global.tempRegistrations.set(verificationId, verificationRecord);
+        return res.status(400).json({
+          success: false,
+          message: 'Verification code expired. Please request a new one.',
+          can_resend: true
+        });
+      }
+
       verificationRecord.is_used = true;
       global.tempRegistrations.set(verificationId, verificationRecord);
-      return res.status(400).json({
+      console.log(consoleStyle.success, '✅ Verification code valid!');
+
+      const existingUser = await db.User.findOne({
+        where: {
+          [db.Sequelize.Op.or]: [
+            { email: verificationRecord.email },
+            { phone_number: verificationRecord.phone_number }
+          ]
+        }
+      });
+
+      if (existingUser) {
+        console.log(consoleStyle.error, '❌ User already exists!');
+        return res.status(400).json({
+          success: false,
+          message: 'User already exists'
+        });
+      }
+
+      console.log(consoleStyle.info, '🔄 Creating user account...');
+      console.log(consoleStyle.data, `   Role: ${role}`);
+
+      const userData = {
+        email: verificationRecord.email,
+        phone_number: verificationRecord.phone_number,
+        password_hash: verificationRecord.password_hash,
+        full_name: verificationRecord.full_name,
+        user_type: role,
+        is_verified: true,
+        is_agent_profile_complete: false
+      };
+
+      if (role === 'agent') {
+        userData.agent_status = 'pending_vetting';
+      }
+
+      const user = await db.User.create(userData);
+      console.log(consoleStyle.success, `✅ User created! ID: ${user.id}`);
+      console.log(consoleStyle.success, `   User Type: ${user.user_type}`);
+
+      const [wallet, created] = await db.Wallet.findOrCreate({
+        where: { user_id: user.id },
+        defaults: {
+          user_id: user.id,
+          balance: 0.00,
+          currency: 'KES'
+        }
+      });
+
+      if (created) {
+        console.log(consoleStyle.success, `💰 Wallet created! Balance: ${wallet.balance} KES`);
+      }
+
+      const token = this.generateToken(user);
+
+      console.log('\n' + consoleStyle.highlight, '='.repeat(60));
+      console.log(consoleStyle.success, '   🎉 USER VERIFIED & CREATED!');
+      console.log(consoleStyle.highlight, '='.repeat(60));
+      console.log(consoleStyle.info, `   👤 ID: ${user.id}`);
+      console.log(consoleStyle.info, `   📧 Email: ${user.email}`);
+      console.log(consoleStyle.info, `   📞 Phone: ${user.phone_number}`);
+      console.log(consoleStyle.info, `   👤 Name: ${user.full_name}`);
+      console.log(consoleStyle.success, `   🏷️  Role: ${user.user_type}`);
+      console.log(consoleStyle.success, `   ✅ Status: VERIFIED`);
+      console.log(consoleStyle.highlight, '='.repeat(60));
+
+      global.tempRegistrations.delete(verificationId);
+
+      res.status(201).json({
+        success: true,
+        message: `Registration complete! Welcome as ${role}.`,
+        token: token,
+        next_step: role === 'agent' ? 'complete_agent_profile' : 'dashboard',
+        requires_agent_profile: role === 'agent',
+        user: {
+          id: user.id,
+          email: user.email,
+          phone_number: user.phone_number,
+          full_name: user.full_name,
+          user_type: user.user_type,
+          is_verified: user.is_verified,
+          is_agent_profile_complete: user.is_agent_profile_complete,
+          agent_status: user.agent_status
+        }
+      });
+
+    } catch (error) {
+      console.log(consoleStyle.error, '🔥 VERIFICATION ERROR:', error);
+      res.status(500).json({
         success: false,
-        message: 'Verification code expired. Please request a new one.',
-        can_resend: true
+        message: 'Verification failed. Please try again.',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
-
-    // Mark as used
-    verificationRecord.is_used = true;
-    global.tempRegistrations.set(verificationId, verificationRecord);
-
-    console.log(consoleStyle.success, '✅ Verification code valid!');
-
-    // Check if user already exists
-    const existingUser = await db.User.findOne({
-      where: {
-        [db.Sequelize.Op.or]: [
-          { email: verificationRecord.email },
-          { phone_number: verificationRecord.phone_number }
-        ]
-      }
-    });
-
-    if (existingUser) {
-      console.log(consoleStyle.error, '❌ User already exists!');
-      return res.status(400).json({
-        success: false,
-        message: 'User already exists'
-      });
-    }
-
-    // ============================================================
-    // CREATE USER WITH THE SELECTED ROLE - NO EXTRA STEP NEEDED
-    // ============================================================
-    console.log(consoleStyle.info, '🔄 Creating user account...');
-    console.log(consoleStyle.data, `   Role: ${role}`);
-
-    // Prepare user data
-    const userData = {
-      email: verificationRecord.email,
-      phone_number: verificationRecord.phone_number,
-      password_hash: verificationRecord.password_hash,
-      full_name: verificationRecord.full_name,
-      user_type: role, // ✅ SET THE SELECTED ROLE IMMEDIATELY!
-      is_verified: true,
-      is_agent_profile_complete: false
-    };
-
-    // Add agent-specific fields
-    if (role === 'agent') {
-      userData.agent_status = 'pending_vetting';
-    }
-
-    // Create the user
-    const user = await db.User.create(userData);
-
-    console.log(consoleStyle.success, `✅ User created! ID: ${user.id}`);
-    console.log(consoleStyle.success, `   User Type: ${user.user_type}`); // ✅ Confirm role
-
-    // Create wallet
-    const [wallet, created] = await db.Wallet.findOrCreate({
-      where: { user_id: user.id },
-      defaults: {
-        user_id: user.id,
-        balance: 0.00,
-        currency: 'KES'
-      }
-    });
-
-    if (created) {
-      console.log(consoleStyle.success, `💰 Wallet created! Balance: ${wallet.balance} KES`);
-    }
-
-    // Generate token - now with correct role
-    const token = this.generateToken(user);
-
-    console.log('\n' + consoleStyle.highlight, '='.repeat(60));
-    console.log(consoleStyle.success, '   🎉 USER VERIFIED & CREATED!');
-    console.log(consoleStyle.highlight, '='.repeat(60));
-    console.log(consoleStyle.info, `   👤 ID: ${user.id}`);
-    console.log(consoleStyle.info, `   📧 Email: ${user.email}`);
-    console.log(consoleStyle.info, `   📞 Phone: ${user.phone_number}`);
-    console.log(consoleStyle.info, `   👤 Name: ${user.full_name}`);
-    console.log(consoleStyle.success, `   🏷️  Role: ${user.user_type}`); // ✅ Show role
-    console.log(consoleStyle.success, `   ✅ Status: VERIFIED`);
-    console.log(consoleStyle.highlight, '='.repeat(60));
-
-    // Clean up - remove used verification record
-    global.tempRegistrations.delete(verificationId);
-
-    // Return success - NO MORE ROLE SELECTION STEP!
-    res.status(201).json({
-      success: true,
-      message: `Registration complete! Welcome as ${role}.`,
-      token: token,
-      next_step: role === 'agent' ? 'complete_agent_profile' : 'dashboard',
-      requires_agent_profile: role === 'agent',
-      user: {
-        id: user.id,
-        email: user.email,
-        phone_number: user.phone_number,
-        full_name: user.full_name,
-        user_type: user.user_type,
-        is_verified: user.is_verified,
-        is_agent_profile_complete: user.is_agent_profile_complete,
-        agent_status: user.agent_status
-      }
-    });
-
-  } catch (error) {
-    console.log(consoleStyle.error, '🔥 VERIFICATION ERROR:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Verification failed. Please try again.',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
+  };
 
   // ============================================================================
   // LEGACY REGISTRATION METHODS - DEPRECATED
   // ============================================================================
 
-  /**
-   * 📝 STEP 1: BASIC REGISTRATION (LEGACY - DEPRECATED)
-   * Kept for backward compatibility only
-   */
   step1Register = async (req, res) => {
     console.log('\n' + '='.repeat(80));
     console.log(consoleStyle.header, '📝 STEP 1: BASIC REGISTRATION (LEGACY)');
@@ -739,9 +474,6 @@ verifyCodeAndCreateUser = async (req, res) => {
     }
   };
 
-  /**
-   * 🔄 RESEND VERIFICATION CODE (LEGACY)
-   */
   resendVerification = async (req, res) => {
     console.log('\n' + '='.repeat(80));
     console.log(consoleStyle.header, '📱 RESEND VERIFICATION CODE');
@@ -799,9 +531,6 @@ verifyCodeAndCreateUser = async (req, res) => {
     }
   };
 
-  /**
-   * ✅ STEP 2: VERIFY & CHOOSE ROLE
-   */
   step2VerifyAndSetRole = async (req, res) => {
     console.log('\n' + '='.repeat(80));
     console.log(consoleStyle.header, '✅ STEP 2: VERIFY & CHOOSE ROLE');
@@ -953,9 +682,9 @@ verifyCodeAndCreateUser = async (req, res) => {
     }
   };
 
-  /**
-   * 🏢 STEP 3: COMPLETE/UPDATE AGENT PROFILE
-   */
+  // ============================================================================
+  // STEP 3: COMPLETE/UPDATE AGENT PROFILE
+  // ============================================================================
   completeAgentProfile = async (req, res) => {
     console.log('\n' + '='.repeat(80));
     console.log(consoleStyle.header, '🏢 STEP 3: COMPLETE/UPDATE AGENT PROFILE');
@@ -1184,9 +913,6 @@ verifyCodeAndCreateUser = async (req, res) => {
   // AUTH METHODS
   // ============================================================================
 
-  /**
-   * 🔐 LOGIN - WITH FULL USER DATA INCLUDING ROLE
-   */
   simpleLogin = async (req, res) => {
     console.log('\n' + '='.repeat(80));
     console.log(consoleStyle.header, '🔐 USER LOGIN');
@@ -1271,7 +997,6 @@ verifyCodeAndCreateUser = async (req, res) => {
 
       const token = this.generateToken(user);
 
-      // Set HTTP-only cookie
       res.cookie('token', token, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
@@ -1304,9 +1029,6 @@ verifyCodeAndCreateUser = async (req, res) => {
     }
   };
 
-  /**
-   * 👤 GET CURRENT USER
-   */
   getCurrentUser = async (req, res) => {
     console.log('\n' + '='.repeat(80));
     console.log(consoleStyle.header, '👤 GET CURRENT USER');
@@ -1372,16 +1094,10 @@ verifyCodeAndCreateUser = async (req, res) => {
     }
   };
 
-  /**
-   * 📋 GET USER PROFILE - Alias for getCurrentUser
-   */
   getUserProfile = async (req, res) => {
     return this.getCurrentUser(req, res);
   };
 
-  /**
-   * ✏️ UPDATE USER PROFILE
-   */
   updateUserProfile = async (req, res) => {
     console.log('\n' + '='.repeat(80));
     console.log(consoleStyle.header, '✏️ UPDATE USER PROFILE');
@@ -1475,131 +1191,86 @@ verifyCodeAndCreateUser = async (req, res) => {
   // AGENT PROFILE ENDPOINTS
   // ============================================================================
 
-  /**
-   * 📋 GET AGENT PROFILE - Complete agent details
-   */
-// In authController.js - Replace the getAgentProfile function
-// In authController.js - Replace the getAgentProfile function with this
-getAgentProfile = async (req, res) => {
-  try {
-    const agentId = req.user.id;
-    console.log(`📋 Getting profile for agent: ${agentId}`);
-    
-    // First, check if the user exists and is an agent
-    const [userCheck] = await db.sequelize.query(`
-      SELECT id, user_type FROM users WHERE id = ?
-    `, {
-      replacements: [agentId],
-      type: db.sequelize.QueryTypes.SELECT
-    });
+  getAgentProfile = async (req, res) => {
+    try {
+      const agentId = req.user.id;
+      console.log(`📋 Getting profile for agent: ${agentId}`);
+      
+      const [userCheck] = await db.sequelize.query(`
+        SELECT id, user_type FROM users WHERE id = ?
+      `, {
+        replacements: [agentId],
+        type: db.sequelize.QueryTypes.SELECT
+      });
 
-    if (!userCheck) {
-      console.log('❌ User not found');
-      return res.status(404).json({
+      if (!userCheck) {
+        console.log('❌ User not found');
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      if (userCheck.user_type !== 'agent') {
+        console.log('❌ User is not an agent:', userCheck.user_type);
+        return res.status(403).json({
+          success: false,
+          message: 'User is not an agent'
+        });
+      }
+
+      const agentResults = await db.sequelize.query(`
+        SELECT 
+          id, email, phone_number, full_name, user_type, is_verified, 
+          is_agent_profile_complete, business_name, business_address, 
+          area_name, town, county, address, latitude, longitude, 
+          id_number, kra_pin, business_registration_number, agent_status, 
+          profile_completed_at, delivery_radius, operating_hours, 
+          created_at, updated_at, profile_image
+        FROM users 
+        WHERE id = ? AND user_type = 'agent'
+      `, {
+        replacements: [agentId],
+        type: db.sequelize.QueryTypes.SELECT
+      });
+
+      if (!agentResults || agentResults.length === 0) {
+        console.log('❌ Agent not found in database');
+        return res.status(404).json({
+          success: false,
+          message: 'Agent profile not found'
+        });
+      }
+
+      const agent = agentResults[0];
+      
+      const gasBrands = await db.sequelize.query(`
+        SELECT gb.id, gb.name, gb.logo_url
+        FROM gas_brands gb
+        INNER JOIN user_gas_brands ugb ON gb.id = ugb.gas_brand_id
+        WHERE ugb.user_id = ?
+      `, {
+        replacements: [agentId],
+        type: db.sequelize.QueryTypes.SELECT
+      });
+
+      agent.gas_brands = gasBrands;
+
+      res.json({
+        success: true,
+        agent: agent
+      });
+
+    } catch (error) {
+      console.error('❌ Error in getAgentProfile:', error);
+      res.status(500).json({
         success: false,
-        message: 'User not found'
+        message: 'Failed to get agent profile',
+        error: error.message
       });
     }
+  };
 
-    if (userCheck.user_type !== 'agent') {
-      console.log('❌ User is not an agent:', userCheck.user_type);
-      return res.status(403).json({
-        success: false,
-        message: 'User is not an agent'
-      });
-    }
-
-    // Use raw query to get agent data (bypasses association issues)
-    const agentResults = await db.sequelize.query(`
-      SELECT 
-        id, 
-        email, 
-        phone_number, 
-        full_name, 
-        user_type, 
-        is_verified, 
-        is_agent_profile_complete, 
-        business_name,
-        business_address, 
-        area_name, 
-        town, 
-        county, 
-        address,
-        latitude, 
-        longitude, 
-        id_number, 
-        kra_pin,
-        business_registration_number, 
-        agent_status, 
-        profile_completed_at,
-        delivery_radius, 
-        operating_hours, 
-        created_at, 
-        updated_at,
-        profile_image
-      FROM users 
-      WHERE id = ? AND user_type = 'agent'
-    `, {
-      replacements: [agentId],
-      type: db.sequelize.QueryTypes.SELECT
-    });
-
-    console.log('📦 Query results:', agentResults ? `Found ${agentResults.length} rows` : 'No results');
-
-    if (!agentResults || agentResults.length === 0) {
-      console.log('❌ Agent not found in database');
-      return res.status(404).json({
-        success: false,
-        message: 'Agent profile not found'
-      });
-    }
-
-    const agent = agentResults[0];
-    
-    console.log('✅ Agent found:', {
-      id: agent.id,
-      business_name: agent.business_name,
-      town: agent.town,
-      county: agent.county,
-      area_name: agent.area_name
-    });
-
-    // Get gas brands using raw query
-    const gasBrands = await db.sequelize.query(`
-      SELECT gb.id, gb.name, gb.logo_url
-      FROM gas_brands gb
-      INNER JOIN user_gas_brands ugb ON gb.id = ugb.gas_brand_id
-      WHERE ugb.user_id = ?
-    `, {
-      replacements: [agentId],
-      type: db.sequelize.QueryTypes.SELECT
-    });
-
-    console.log(`✅ Found ${gasBrands.length} gas brands`);
-
-    // Add gas brands to response
-    agent.gas_brands = gasBrands;
-
-    res.json({
-      success: true,
-      agent: agent
-    });
-
-  } catch (error) {
-    console.error('❌ Error in getAgentProfile:', error);
-    console.error('Error details:', error.message);
-    console.error('Stack:', error.stack);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get agent profile',
-      error: error.message
-    });
-  }
-};
-
-  /**
-   * ✏️ UPDATE AGENT PROFILE
-   */
   updateAgentProfile = async (req, res) => {
     console.log('\n' + '='.repeat(80));
     console.log(consoleStyle.header, '✏️ UPDATE AGENT PROFILE');
@@ -1686,9 +1357,6 @@ getAgentProfile = async (req, res) => {
     }
   };
 
-  /**
-   * 📊 GET AGENT DASHBOARD STATS
-   */
   getAgentDashboardStats = async (req, res) => {
     try {
       const userId = req.user.id;
@@ -1741,9 +1409,6 @@ getAgentProfile = async (req, res) => {
     }
   };
 
-  /**
-   * 🛒 GET AGENT ORDERS
-   */
   getAgentOrders = async (req, res) => {
     try {
       const userId = req.user.id;
@@ -1774,9 +1439,6 @@ getAgentProfile = async (req, res) => {
     }
   };
 
-  /**
-   * 🏷️ GET AGENT GAS BRANDS
-   */
   getAgentGasBrands = async (req, res) => {
     try {
       const userId = req.user.id;
@@ -1807,9 +1469,6 @@ getAgentProfile = async (req, res) => {
     }
   };
 
-  /**
-   * 🔄 UPDATE AGENT GAS BRANDS
-   */
   updateAgentGasBrands = async (req, res) => {
     try {
       const userId = req.user.id;
@@ -1851,9 +1510,6 @@ getAgentProfile = async (req, res) => {
   // DEBUG & UTILITY METHODS
   // ============================================================================
 
-  /**
-   * 🚪 LOGOUT USER - Clear cookie
-   */
   logoutUser = async (req, res) => {
     console.log('\n' + '='.repeat(80));
     console.log(consoleStyle.header, '🚪 USER LOGOUT');
@@ -1884,9 +1540,6 @@ getAgentProfile = async (req, res) => {
     }
   };
 
-  /**
-   * 🗑️ DELETE ACCOUNT
-   */
   deleteAccount = async (req, res) => {
     console.log('\n' + '='.repeat(80));
     console.log(consoleStyle.header, '🗑️ DELETE ACCOUNT');
@@ -1931,9 +1584,6 @@ getAgentProfile = async (req, res) => {
     }
   };
 
-  /**
-   * 🐛 DEBUG USER
-   */
   debugUser = async (req, res) => {
     try {
       const { phone_number, email } = req.query;
@@ -1979,9 +1629,6 @@ getAgentProfile = async (req, res) => {
     }
   };
 
-  /**
-   * 🐛 DEBUG AGENT
-   */
   debugAgent = async (req, res) => {
     try {
       const { userId } = req.params;
@@ -2017,207 +1664,6 @@ getAgentProfile = async (req, res) => {
     }
   };
 
-  /**
-   * 📧 SEND VERIFICATION CODE VIA EMAIL (Legacy)
-   */
-/**
- * 📝 STEP 1: SEND VERIFICATION CODE - NO USER CREATED
- * FIXED: Removed database operations completely - using in-memory storage only
- */
-sendVerificationCode = async (req, res) => {
-  console.log('\n' + '='.repeat(80));
-  console.log(consoleStyle.header, '📧 SEND VERIFICATION CODE');
-  console.log(consoleStyle.time, `📅 Time: ${formatKenyaTime(new Date())}`);
-  console.log('='.repeat(80));
-  
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const { email, phone_number, full_name, password } = req.body;
-
-    console.log(consoleStyle.info, '📦 Registration Request:');
-    console.log(consoleStyle.data, `   Email: ${email}`);
-    console.log(consoleStyle.data, `   Phone: ${phone_number}`);
-    console.log(consoleStyle.data, `   Name: ${full_name || 'Not provided'}`);
-
-    // Validate password
-    if (password.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: 'Password must be at least 6 characters'
-      });
-    }
-
-    // Normalize phone
-    const normalizedPhone = this.normalizePhoneNumber(phone_number);
-    console.log(consoleStyle.data, `   Normalized: ${normalizedPhone}`);
-
-    // Check if user already exists
-    const existingUser = await db.User.findOne({
-      where: {
-        [db.Sequelize.Op.or]: [
-          { email },
-          { phone_number: normalizedPhone }
-        ]
-      }
-    });
-
-    if (existingUser) {
-      console.log(consoleStyle.error, '❌ User already exists!');
-      return res.status(400).json({
-        success: false,
-        message: 'User with this email or phone already exists'
-      });
-    }
-
-    // Generate verification code
-    const code = this.generateVerificationCode();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-    // ✅ FIX: Use in-memory storage ONLY - no database operations
-    // Initialize global temp storage if it doesn't exist
-    if (!global.tempRegistrations) {
-      global.tempRegistrations = new Map();
-    }
-
-    // Create a unique ID for this verification
-    const verificationId = `ver_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    
-    // Store verification data in memory
-    global.tempRegistrations.set(verificationId, {
-      email,
-      phone_number: normalizedPhone,
-      full_name: full_name || null,
-      password_hash: password,
-      code,
-      expires_at: expiresAt,
-      is_used: false,
-      attempts: 0,
-      created_at: new Date()
-    });
-
-    console.log(consoleStyle.success, '✅ Verification record created in memory!');
-    console.log(consoleStyle.data, `   Verification ID: ${verificationId}`);
-    
-    // ============================================================
-    // LOG CODE TO TERMINAL - BIG AND CLEAR
-    // ============================================================
-    console.log('\n' + '\x1b[43m\x1b[30m%s\x1b[0m', '🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔');
-    console.log('\x1b[43m\x1b[30m%s\x1b[0m', '🔔                                                🔔');
-    console.log('\x1b[43m\x1b[30m%s\x1b[0m', '🔔         📧 VERIFICATION CODE GENERATED          🔔');
-    console.log('\x1b[43m\x1b[30m%s\x1b[0m', '🔔                                                🔔');
-    console.log('\x1b[43m\x1b[30m%s\x1b[0m', '🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔');
-    console.log('\x1b[33m%s\x1b[0m', '='.repeat(60));
-    console.log('\x1b[33m%s\x1b[0m', '   📋 REGISTRATION DETAILS:');
-    console.log('\x1b[33m%s\x1b[0m', '='.repeat(60));
-    console.log('\x1b[36m%s\x1b[0m', `   👤 Name: ${full_name || 'Not provided'}`);
-    console.log('\x1b[36m%s\x1b[0m', `   📧 Email: ${email}`);
-    console.log('\x1b[36m%s\x1b[0m', `   📞 Phone: ${phone_number}`);
-    console.log('\x1b[36m%s\x1b[0m', `   🔑 Normalized: ${normalizedPhone}`);
-    console.log('\x1b[32m%s\x1b[0m', `   🔢 VERIFICATION CODE: ${code}`);
-    console.log('\x1b[34m%s\x1b[0m', `   ⏰ Expires: ${formatKenyaTime(expiresAt)}`);
-    console.log('\x1b[33m%s\x1b[0m', '='.repeat(60));
-    console.log('\x1b[33m%s\x1b[0m', '   ⚠️  USER NOT CREATED YET - VERIFICATION REQUIRED');
-    console.log('\x1b[33m%s\x1b[0m', '='.repeat(60));
-
-    // ============================================================
-    // SEND EMAIL TO DEVELOPER (raffnixx@gmail.com)
-    // ============================================================
-    try {
-      const testAccount = await nodemailer.createTestAccount();
-      
-      const transporter = nodemailer.createTransport({
-        host: 'smtp.ethereal.email',
-        port: 587,
-        secure: false,
-        auth: {
-          user: testAccount.user,
-          pass: testAccount.pass,
-        },
-      });
-
-      const info = await transporter.sendMail({
-        from: '"Mtaani Gas" <noreply@mtaanigas.com>',
-        to: 'raffnixx@gmail.com',
-        subject: `🔐 VERIFICATION CODE: ${code} - ${email}`,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-            <div style="text-align: center; margin-bottom: 30px;">
-              <h1 style="color: #FF6B35; margin-bottom: 10px;">Mtaani Gas</h1>
-              <p style="color: #666; font-size: 16px;">Futuristic Gas Delivery</p>
-            </div>
-            
-            <div style="background-color: #f8f9fa; padding: 30px; border-radius: 10px; text-align: center;">
-              <h2 style="color: #FF6B35; margin-bottom: 20px;">New Registration - Verification Required</h2>
-              
-              <div style="background-color: #fff; padding: 30px; border-radius: 10px; border: 3px solid #FF6B35; margin: 20px 0;">
-                <p style="color: #666; font-size: 18px; margin-bottom: 15px;">Verification Code:</p>
-                <span style="font-size: 48px; font-weight: bold; letter-spacing: 10px; color: #FF6B35;">${code}</span>
-              </div>
-              
-              <div style="text-align: left; margin-top: 30px; padding: 20px; background-color: #fff; border-radius: 10px;">
-                <h3 style="color: #333; margin-top: 0;">User Details:</h3>
-                <p><strong>Name:</strong> ${full_name || 'Not provided'}</p>
-                <p><strong>Email:</strong> ${email}</p>
-                <p><strong>Phone:</strong> ${phone_number}</p>
-                <p><strong>Normalized:</strong> ${normalizedPhone}</p>
-                <p><strong>Expires:</strong> ${formatKenyaTime(expiresAt)}</p>
-                <p><strong>Verification ID:</strong> ${verificationId}</p>
-              </div>
-              
-              <p style="color: #e74c3c; margin-top: 20px; font-weight: bold;">
-                ⚠️ User has NOT been created yet. Verification required.
-              </p>
-            </div>
-            
-            <div style="margin-top: 30px; color: #999; font-size: 12px; text-align: center;">
-              <p>This is a development verification email for Mtaani Gas.</p>
-              <p>© 2026 Mtaani Gas. All rights reserved.</p>
-            </div>
-          </div>
-        `,
-      });
-
-      console.log(consoleStyle.success, '✅ Verification email sent to developer!');
-      console.log(consoleStyle.info, `   Preview: ${nodemailer.getTestMessageUrl(info)}`);
-    } catch (emailError) {
-      console.log(consoleStyle.warning, '⚠️ Could not send email:', emailError.message);
-      console.log(consoleStyle.warning, '   But code is still available in terminal!');
-    }
-
-    // Return success - NO USER CREATED YET
-    res.json({
-      success: true,
-      message: 'Verification code sent. Please verify to complete registration.',
-      requires_verification: true,
-      verification_id: verificationId,
-      expires_at: expiresAt,
-      email: email,
-      phone: phone_number,
-      // Include code only in development
-      code: process.env.NODE_ENV === 'development' ? code : undefined
-    });
-
-  } catch (error) {
-    console.log(consoleStyle.error, '🔥 Send verification error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to send verification code. Please try again.',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-  /**
-   * 🧪 DEBUG: Force send verification code to email
-   */
   debugSendVerification = async (req, res) => {
     console.log('\n' + '='.repeat(80));
     console.log(consoleStyle.header, '🧪 DEBUG: SEND VERIFICATION TO EMAIL');
@@ -2285,9 +1731,6 @@ sendVerificationCode = async (req, res) => {
     }
   };
 
-  /**
-   * Create verification code (legacy)
-   */
   createVerificationCode = async (userId, type = 'phone_verification') => {
     try {
       await db.VerificationCode.destroy({

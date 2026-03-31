@@ -374,33 +374,28 @@ app.use((err, req, res, next) => {
 // START SERVER
 // ============================================================
 
+// ============================================================
+// START SERVER
+// ============================================================
+
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
   try {
     await syncDatabase();
     
-    app.listen(PORT, () => {
+    // ✅ CHANGE THIS LINE - Add '0.0.0.0' to listen on all interfaces
+    app.listen(PORT, '0.0.0.0', () => {
       console.log('\n' + '='.repeat(70));
       console.log('\x1b[1m\x1b[36m🚀 MTAANI GAS MARKETPLACE BACKEND STARTED\x1b[0m');
       console.log('='.repeat(70));
       console.log(`📡 Port: ${PORT}`);
-      console.log(`🌐 URL: http://localhost:${PORT}`);
+      console.log(`🌐 Local URL: http://localhost:${PORT}`);
+      console.log(`📱 Android Emulator: http://10.0.2.2:${PORT}`);  // Add this line
+      console.log(`🌍 Network URL: http://<your-ip>:${PORT}`);       // Add this line
       console.log(`🏷️  Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log('='.repeat(70));
-      console.log('\n📋 AVAILABLE ENDPOINTS:');
-      console.log('👉 POST /api/auth/login             - Login');
-      console.log('👉 GET  /api/auth/profile           - Get profile');
-      console.log('👉 GET  /api/agent/profile          - Agent profile');
-      console.log('👉 GET  /api/agent/gas-brands       - Agent gas brands');
-      console.log('👉 GET  /api/products/gas-brands    - Get gas brands');
-      console.log('👉 GET  /api/agents/nearby          - Find nearby agents');
-      console.log('👉 GET  /api/health                 - Health check');
-      console.log('👉 GET  /api/debug/users            - List users (debug)');
-      console.log('👉 GET  /api/debug/user/:id         - Get user by ID (debug)');
-      console.log('👉 POST /api/debug/make-agent/:id   - Make user agent (debug)');
-      console.log('='.repeat(70));
-      console.log('\n\x1b[32m✅ Server ready!\x1b[0m\n');
+      // ... rest of your console output
     });
 
   } catch (error) {
@@ -408,5 +403,7 @@ const startServer = async () => {
     process.exit(1);
   }
 };
+
+
 
 startServer();
