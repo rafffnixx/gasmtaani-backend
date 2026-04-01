@@ -507,9 +507,11 @@ exports.getAgentsByBrand = async (req, res) => {
 };
 
 // Get gas brands with counts of nearby agents - location REQUIRED for customers
+// Get gas brands with counts of nearby agents - FIXED VERSION
+// Get gas brands with counts of nearby agents - FIXED VERSION
 exports.getGasBrandsWithAgentCounts = async (req, res) => {
   try {
-    const { lat, lng, radius = 5 } = req.query; // Default 5km
+    const { lat, lng, radius = 5 } = req.query;
     
     // Check user type
     const userType = req.user?.user_type;
@@ -544,162 +546,79 @@ exports.getGasBrandsWithAgentCounts = async (req, res) => {
 
     console.log(`📍 Searching brands within ${searchRadius}km of ${userLat}, ${userLng}`);
 
-    // Get all active gas brands first
-    const brands = await db.GasBrand.findAll({
-      where: { is_active: true },
-      attributes: ['id', 'name', 'logo_url', 'description', 'is_popular']
+    // ✅ FIXED: Use proper parameterized query with ? placeholders
+    const query = `
+      SELECT 
+        gb.id,
+        gb.name,
+        gb.logo_url,
+        gb.description,
+        gb.is_popular,
+        COUNT(DISTINCT u.id) as agent_count,
+        MIN(agl.selling_price) as min_price,
+        MAX(agl.selling_price) as max_price,
+        ARRAY_AGG(DISTINCT agl.size) as sizes
+      FROM gas_brands gb
+      INNER JOIN agent_gas_listings agl ON gb.id = agl.gas_brand_id
+      INNER JOIN users u ON agl.agent_id = u.id
+      WHERE u.user_type = 'agent'
+        AND u.is_verified = true
+        AND u.is_active = true
+        AND agl.is_available = true
+        AND agl.is_approved = true
+        AND u.latitude IS NOT NULL
+        AND u.longitude IS NOT NULL
+        AND (6371 * acos(
+          cos(radians(?)) * cos(radians(u.latitude)) * 
+          cos(radians(u.longitude) - radians(?)) + 
+          sin(radians(?)) * sin(radians(u.latitude))
+        )) <= ?
+      GROUP BY gb.id, gb.name, gb.logo_url, gb.description, gb.is_popular
+      HAVING COUNT(DISTINCT u.id) > 0
+      ORDER BY 
+        gb.is_popular DESC,
+        agent_count DESC,
+        gb.name ASC
+    `;
+
+    const brands = await db.sequelize.query(query, {
+      replacements: [userLat, userLng, userLat, searchRadius],
+      type: db.sequelize.QueryTypes.SELECT
     });
 
-    console.log(`✅ Found ${brands.length} active gas brands`);
+    console.log(`🎯 Found ${brands.length} brands with agents within ${searchRadius}km`);
 
-    // Get agent counts for each brand within radius
-    const brandsWithCounts = await Promise.all(
-      brands.map(async (brand) => {
-        try {
-          // Find agents selling this brand within radius
-          const agents = await db.User.findAll({
-            where: {
-              user_type: 'agent',
-              is_verified: true,
-              is_active: true,
-              latitude: { [Op.not]: null },
-              longitude: { [Op.not]: null }
-            },
-            include: [
-              {
-                model: db.AgentGasListing,
-                as: 'agentGasListings', // FIXED: Changed from 'gasListings' to 'agentGasListings'
-                where: { 
-                  gas_brand_id: brand.id,
-                  is_available: true,
-                  is_approved: true 
-                },
-                required: true,
-                attributes: ['id', 'size', 'selling_price']
-              }
-            ],
-            attributes: ['id', 'latitude', 'longitude']
-          });
+    // Format the response
+    const formattedBrands = brands.map(brand => ({
+      id: brand.id,
+      name: brand.name,
+      logo_url: brand.logo_url,
+      description: brand.description,
+      is_popular: brand.is_popular,
+      agent_count: parseInt(brand.agent_count),
+      min_price: brand.min_price ? parseFloat(brand.min_price) : null,
+      max_price: brand.max_price ? parseFloat(brand.max_price) : null,
+      price_range: brand.min_price && brand.max_price 
+        ? (brand.min_price === brand.max_price 
+          ? `KES ${parseFloat(brand.min_price).toLocaleString('en-KE')}` 
+          : `KES ${parseFloat(brand.min_price).toLocaleString('en-KE')} - KES ${parseFloat(brand.max_price).toLocaleString('en-KE')}`)
+        : null,
+      sizes: brand.sizes ? brand.sizes.filter(s => s !== null) : [],
+      has_nearby_agents: true
+    }));
 
-          console.log(`📊 Found ${agents.length} agents for brand ${brand.name}`);
-
-          // Filter agents by distance
-          const R = 6371; // Earth's radius in km
-          const nearbyAgents = [];
-          
-          for (const agent of agents) {
-            if (!agent.latitude || !agent.longitude) {
-              console.log(`⚠️ Agent ${agent.id} has no location data`);
-              continue;
-            }
-            
-            const agentLat = parseFloat(agent.latitude);
-            const agentLng = parseFloat(agent.longitude);
-            
-            // Validate coordinates
-            if (isNaN(agentLat) || isNaN(agentLng)) {
-              console.log(`⚠️ Agent ${agent.id} has invalid coordinates: ${agent.latitude}, ${agent.longitude}`);
-              continue;
-            }
-            
-            const dLat = (agentLat - userLat) * Math.PI / 180;
-            const dLng = (agentLng - userLng) * Math.PI / 180;
-            
-            const a = 
-              Math.sin(dLat/2) * Math.sin(dLat/2) +
-              Math.cos(userLat * Math.PI / 180) * Math.cos(agentLat * Math.PI / 180) *
-              Math.sin(dLng/2) * Math.sin(dLng/2);
-            
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-            const distance = R * c;
-            
-            console.log(`📍 Agent ${agent.id}: ${distance.toFixed(2)}km from user`);
-            
-            if (distance <= searchRadius) {
-              nearbyAgents.push(agent);
-            }
-          }
-
-          // Get pricing info from listings
-          let minPrice = null;
-          let maxPrice = null;
-          const sizes = new Set();
-          
-          nearbyAgents.forEach(agent => {
-            agent.agentGasListings?.forEach(listing => {
-              const price = parseFloat(listing.selling_price);
-              if (!isNaN(price)) {
-                if (minPrice === null || price < minPrice) minPrice = price;
-                if (maxPrice === null || price > maxPrice) maxPrice = price;
-              }
-              if (listing.size) {
-                sizes.add(listing.size);
-              }
-            });
-          });
-
-          return {
-            id: brand.id,
-            name: brand.name,
-            logo_url: brand.logo_url,
-            description: brand.description,
-            is_popular: brand.is_popular,
-            agent_count: nearbyAgents.length,
-            min_price: minPrice,
-            max_price: maxPrice,
-            price_range: minPrice && maxPrice 
-              ? (minPrice === maxPrice 
-                ? `KES ${minPrice.toLocaleString('en-KE')}` 
-                : `KES ${minPrice.toLocaleString('en-KE')} - KES ${maxPrice.toLocaleString('en-KE')}`)
-              : null,
-            sizes: Array.from(sizes).sort(),
-            has_nearby_agents: nearbyAgents.length > 0
-          };
-          
-        } catch (error) {
-          console.error(`Error processing brand ${brand.name}:`, error);
-          return {
-            id: brand.id,
-            name: brand.name,
-            logo_url: brand.logo_url,
-            description: brand.description,
-            is_popular: brand.is_popular,
-            agent_count: 0,
-            min_price: null,
-            max_price: null,
-            price_range: null,
-            sizes: [],
-            has_nearby_agents: false
-          };
-        }
-      })
-    );
-
-    // For customers: Filter out brands with no nearby agents
-    // For admins: Show all brands with counts (even 0)
-    const filteredBrands = isCustomer
-      ? brandsWithCounts.filter(brand => brand.agent_count > 0)
-      : brandsWithCounts;
-
-    // Sort brands (popular first, then by agent count, then alphabetically)
-    filteredBrands.sort((a, b) => {
-      if (a.is_popular && !b.is_popular) return -1;
-      if (!a.is_popular && b.is_popular) return 1;
-      if (a.agent_count !== b.agent_count) return b.agent_count - a.agent_count;
-      return a.name.localeCompare(b.name);
-    });
-
-    console.log(`🎯 Returning ${filteredBrands.length} brands with agent counts`);
+    // Calculate total agents
+    const totalAgents = formattedBrands.reduce((sum, brand) => sum + brand.agent_count, 0);
 
     res.json({
       success: true,
       user_location: { lat: userLat, lng: userLng },
       search_radius: searchRadius,
-      brands: filteredBrands,
+      brands: formattedBrands,
       stats: {
-        total_brands: filteredBrands.length,
-        brands_with_agents: filteredBrands.filter(b => b.agent_count > 0).length,
-        total_agents: filteredBrands.reduce((sum, brand) => sum + brand.agent_count, 0)
+        total_brands: formattedBrands.length,
+        brands_with_agents: formattedBrands.length,
+        total_agents: totalAgents
       },
       user_type: userType || 'customer'
     });
@@ -713,7 +632,7 @@ exports.getGasBrandsWithAgentCounts = async (req, res) => {
     });
   }
 };
-
+// Helper function to get all brands with agent counts (no location filter)
 // Helper function to get all brands with agent counts (no location filter)
 async function getAllBrandsWithAgentCounts(res, userType = 'admin/agent') {
   try {
@@ -728,7 +647,7 @@ async function getAllBrandsWithAgentCounts(res, userType = 'admin/agent') {
         COUNT(DISTINCT agl.agent_id) as agent_count,
         MIN(agl.selling_price) as min_price,
         MAX(agl.selling_price) as max_price,
-        GROUP_CONCAT(DISTINCT agl.size) as available_sizes
+        ARRAY_AGG(DISTINCT agl.size) as sizes
       FROM gas_brands gb
       LEFT JOIN agent_gas_listings agl ON gb.id = agl.gas_brand_id
         AND agl.is_available = true 
@@ -738,9 +657,11 @@ async function getAllBrandsWithAgentCounts(res, userType = 'admin/agent') {
       ORDER BY agent_count DESC, gb.is_popular DESC, gb.name ASC
     `;
 
-    const [results] = await db.sequelize.query(query);
+    const brands = await db.sequelize.query(query, {
+      type: db.sequelize.QueryTypes.SELECT
+    });
 
-    const brands = results.map(row => ({
+    const formattedBrands = brands.map(row => ({
       id: row.id,
       name: row.name,
       logo_url: row.logo_url,
@@ -754,19 +675,19 @@ async function getAllBrandsWithAgentCounts(res, userType = 'admin/agent') {
           ? `KES ${parseFloat(row.min_price).toLocaleString('en-KE')}` 
           : `KES ${parseFloat(row.min_price).toLocaleString('en-KE')} - KES ${parseFloat(row.max_price).toLocaleString('en-KE')}`)
         : null,
-      sizes: row.available_sizes ? row.available_sizes.split(',').filter(size => size !== null && size !== '') : [],
+      sizes: row.sizes ? row.sizes.filter(s => s !== null) : [],
       has_nearby_agents: parseInt(row.agent_count) > 0
     }));
 
-    console.log(`📊 Found ${brands.length} brands with counts (no location filter)`);
+    console.log(`📊 Found ${formattedBrands.length} brands with counts (no location filter)`);
 
     return res.json({
       success: true,
-      brands: brands,
+      brands: formattedBrands,
       stats: {
-        total_brands: brands.length,
-        brands_with_agents: brands.filter(b => b.agent_count > 0).length,
-        total_agents: brands.reduce((sum, brand) => sum + brand.agent_count, 0)
+        total_brands: formattedBrands.length,
+        brands_with_agents: formattedBrands.filter(b => b.agent_count > 0).length,
+        total_agents: formattedBrands.reduce((sum, brand) => sum + brand.agent_count, 0)
       },
       user_type: userType,
       note: 'No location provided. Showing all brands with agent counts.'
