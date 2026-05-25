@@ -34,15 +34,62 @@ const syncDatabase = async () => {
 // MIDDLEWARE - SINGLE CORS CONFIG
 // ============================================================
 
-// ✅ SINGLE CORS CONFIGURATION - FIXED
+// ============================================================
+// MIDDLEWARE - FIXED CORS FOR EXPO
+// ============================================================
+
 const corsOptions = {
-  origin: ['http://localhost:19006', 'http://localhost:3000', 'http://10.0.2.2:19006'],
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    
+    // List of allowed origins
+    const allowedOrigins = [
+      'http://localhost:19006',
+      'http://localhost:19000',
+      'http://localhost:19001',
+      'http://localhost:19002',
+      'http://localhost:8081',
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://10.0.2.2:19006',
+      'http://10.0.2.2:19000',
+      'http://10.0.2.2:8081',
+      'exp://192.168.1.102:19000',
+      'exp://192.168.1.102:19001',
+      'exp://192.168.1.102:19002',
+      'exp://192.168.1.102:8081',
+      'exp://192.168.1.70:19000',
+      'exp://192.168.1.70:19001',
+    ];
+    
+    // Check if origin matches any allowed pattern
+    const isAllowed = allowedOrigins.some(allowed => origin === allowed);
+    
+    // Allow any exp:// or http:// URL (for development)
+    const isExpoOrigin = origin.startsWith('exp://') || 
+                         origin.startsWith('http://192.168.') ||
+                         origin.includes('.expo.io');
+    
+    if (isAllowed || isExpoOrigin) {
+      callback(null, true);
+    } else {
+      console.log('🚫 CORS blocked origin:', origin);
+      callback(null, true); // Temporarily allow all for testing
+    }
+  },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
 };
 
-app.use(cors(corsOptions)); // ✅ ONE CORS MIDDLEWARE
+// Apply CORS middleware
+app.use(cors(corsOptions));
+
+// Remove the problematic app.options line - Express handles OPTIONS automatically!
+
+
 app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

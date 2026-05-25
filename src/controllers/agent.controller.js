@@ -3,6 +3,218 @@ const db = require('../models');
 const { Op } = require('sequelize');
 
 class AgentController {
+  // ========== PROFILE MANAGEMENT ==========
+  
+  // Get agent profile
+  getAgentProfile = async (req, res) => {
+    try {
+      const agentId = req.user.id;
+      console.log(`📋 Getting profile for agent: ${agentId}`);
+      
+      // Get agent basic info
+      const agent = await db.User.findByPk(agentId, {
+        attributes: {
+          exclude: ['password_hash']
+        }
+      });
+
+      if (!agent) {
+        return res.status(404).json({
+          success: false,
+          message: 'Agent not found'
+        });
+      }
+
+      // Get gas brands using RAW QUERY (avoid association issues)
+      let gasBrands = [];
+      try {
+        const [results] = await db.sequelize.query(`
+          SELECT gb.id, gb.name, gb.logo_url
+          FROM gas_brands gb
+          INNER JOIN user_gas_brands ugb ON gb.id = ugb.gas_brand_id
+          WHERE ugb.user_id = ?
+        `, {
+          replacements: [agentId]
+        });
+        
+        gasBrands = results || [];
+        console.log(`✅ Found ${gasBrands.length} gas brands for agent`);
+      } catch (dbError) {
+        console.error('Error fetching gas brands:', dbError.message);
+        // Continue without gas brands
+      }
+
+      // Convert to plain object and add gas_brands
+      const agentData = agent.toJSON();
+      agentData.gas_brands = gasBrands;
+
+      res.json({
+        success: true,
+        agent: agentData
+      });
+    } catch (error) {
+      console.error('❌ Error getting agent profile:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to get agent profile',
+        error: error.message
+      });
+    }
+  };
+
+  // Update agent profile
+  updateAgentProfile = async (req, res) => {
+    try {
+      const agentId = req.user.id;
+      const updates = req.body;
+
+      const agent = await db.User.findByPk(agentId);
+      if (!agent) {
+        return res.status(404).json({
+          success: false,
+          message: 'Agent not found'
+        });
+      }
+
+      // Don't allow updating sensitive fields
+      delete updates.id;
+      delete updates.password_hash;
+      delete updates.user_type;
+      delete updates.is_verified;
+
+      await agent.update(updates);
+
+      res.json({
+        success: true,
+        message: 'Profile updated successfully',
+        agent
+      });
+    } catch (error) {
+      console.error('Error updating profile:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to update profile'
+      });
+    }
+  };
+
+  // Update location
+  updateLocation = async (req, res) => {
+    try {
+      const agentId = req.user.id;
+      const { latitude, longitude, address, area_name, county, town } = req.body;
+
+      const agent = await db.User.findByPk(agentId);
+      if (!agent) {
+        return res.status(404).json({
+          success: false,
+          message: 'Agent not found'
+        });
+      }
+
+      const updateData = {};
+      if (latitude !== undefined) updateData.latitude = latitude;
+      if (longitude !== undefined) updateData.longitude = longitude;
+      if (address !== undefined) updateData.address = address;
+      if (area_name !== undefined) updateData.area_name = area_name;
+      if (county !== undefined) updateData.county = county;
+      if (town !== undefined) updateData.town = town;
+
+      await agent.update(updateData);
+
+      res.json({
+        success: true,
+        message: 'Location updated successfully',
+        location: {
+          latitude: agent.latitude,
+          longitude: agent.longitude,
+          address: agent.address,
+          area_name: agent.area_name,
+          county: agent.county,
+          town: agent.town
+        }
+      });
+    } catch (error) {
+      console.error('Error updating location:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to update location'
+      });
+    }
+  };
+
+  // Update contact info
+  updateContactInfo = async (req, res) => {
+    try {
+      const agentId = req.user.id;
+      const { phone_number, email, business_name } = req.body;
+
+      const agent = await db.User.findByPk(agentId);
+      if (!agent) {
+        return res.status(404).json({
+          success: false,
+          message: 'Agent not found'
+        });
+      }
+
+      await agent.update({
+        phone_number: phone_number || agent.phone_number,
+        email: email || agent.email,
+        business_name: business_name || agent.business_name
+      });
+
+      res.json({
+        success: true,
+        message: 'Contact information updated successfully',
+        contact: {
+          phone_number: agent.phone_number,
+          email: agent.email,
+          business_name: agent.business_name
+        }
+      });
+    } catch (error) {
+      console.error('Error updating contact:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to update contact information'
+      });
+    }
+  };
+
+  // Submit verification
+  submitVerification = async (req, res) => {
+    try {
+      const agentId = req.user.id;
+      const { id_number, kra_pin, business_registration } = req.body;
+
+      const agent = await db.User.findByPk(agentId);
+      if (!agent) {
+        return res.status(404).json({
+          success: false,
+          message: 'Agent not found'
+        });
+      }
+
+      await agent.update({
+        id_number: id_number || agent.id_number,
+        kra_pin: kra_pin || agent.kra_pin,
+        business_registration_number: business_registration || agent.business_registration_number,
+        verification_status: 'pending'
+      });
+
+      res.json({
+        success: true,
+        message: 'Verification submitted successfully. Pending review.'
+      });
+    } catch (error) {
+      console.error('Error submitting verification:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to submit verification'
+      });
+    }
+  };
+
   // ========== DASHBOARD ROUTES ==========
   
   // Get dashboard statistics
@@ -768,6 +980,28 @@ class AgentController {
     }
   };
 
+  // Get gas brands for agent selection
+  getAgentGasBrands = async (req, res) => {
+    try {
+      const brands = await db.GasBrand.findAll({
+        where: { is_active: true },
+        attributes: ['id', 'name', 'logo_url'],
+        order: [['name', 'ASC']]
+      });
+
+      res.json({
+        success: true,
+        brands
+      });
+    } catch (error) {
+      console.error('Error getting gas brands:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to get gas brands'
+      });
+    }
+  };
+
   // Add new product
   addProduct = async (req, res) => {
     try {
@@ -950,29 +1184,67 @@ class AgentController {
   };
 
   // ========== EARNINGS & ANALYTICS ==========
-  // These will use the EarningsController methods
-  // But keeping placeholders here for completeness
 
+  // Get agent earnings summary
   getAgentEarnings = async (req, res) => {
     try {
       const agentId = req.user.id;
       const { period = 'month' } = req.query;
 
-      // Simple implementation - can be expanded
-      const where = {
-        agent_id: agentId,
-        status: 'delivered',
-        payment_status: 'paid'
-      };
+      console.log(`💰 Fetching earnings for agent: ${agentId}, period: ${period}`);
 
-      const totalEarnings = await db.Order.sum('grand_total', { where }) || 0;
-      
-      const pendingWhere = {
-        agent_id: agentId,
-        status: { [Op.in]: ['confirmed', 'processing', 'dispatched'] },
-        payment_status: 'paid'
-      };
-      const pendingEarnings = await db.Order.sum('grand_total', { where: pendingWhere }) || 0;
+      // Get all completed orders
+      const completedOrders = await db.Order.findAll({
+        where: {
+          agent_id: agentId,
+          status: 'delivered',
+          payment_status: 'paid'
+        },
+        include: [
+          {
+            model: db.User,
+            as: 'customer',
+            attributes: ['id', 'full_name']
+          },
+          {
+            model: db.AgentGasListing,
+            as: 'listing',
+            include: [{
+              model: db.GasBrand,
+              as: 'brand',
+              attributes: ['name']
+            }]
+          }
+        ],
+        order: [['created_at', 'DESC']]
+      });
+
+      const totalEarnings = completedOrders.reduce((sum, order) => 
+        sum + parseFloat(order.grand_total || 0), 0);
+
+      // Get pending orders
+      const pendingOrders = await db.Order.findAll({
+        where: {
+          agent_id: agentId,
+          status: ['confirmed', 'processing', 'dispatched'],
+          payment_status: 'paid'
+        }
+      });
+
+      const pendingEarnings = pendingOrders.reduce((sum, order) => 
+        sum + parseFloat(order.grand_total || 0), 0);
+
+      // Format transactions
+      const transactions = completedOrders.slice(0, 20).map(order => ({
+        id: order.id,
+        order_number: order.order_number,
+        type: 'credit',
+        amount: parseFloat(order.grand_total),
+        description: `Order #${order.order_number} - ${order.listing?.brand?.name || 'Gas'} ${order.listing?.size || ''}`,
+        date: order.created_at,
+        status: 'completed',
+        customer_name: order.customer?.full_name || 'Customer'
+      }));
 
       res.json({
         success: true,
@@ -982,7 +1254,12 @@ class AgentController {
           pendingWithdrawal: pendingEarnings,
           thisMonth: totalEarnings * 0.3, // Placeholder - implement properly
           lastMonth: totalEarnings * 0.2, // Placeholder - implement properly
-          transactions: []
+          transactions,
+          stats: {
+            totalOrders: completedOrders.length,
+            pendingOrders: pendingOrders.length,
+            averageOrderValue: completedOrders.length > 0 ? totalEarnings / completedOrders.length : 0
+          }
         }
       });
     } catch (error) {
@@ -1006,208 +1283,14 @@ class AgentController {
     res.json({ success: true, message: 'Monthly earnings placeholder' });
   };
 
-  // ========== PROFILE & SETTINGS ==========
-
-  // Get agent profile
-  getAgentProfile = async (req, res) => {
-    try {
-      const agentId = req.user.id;
-      
-      const agent = await db.User.findByPk(agentId, {
-        attributes: {
-          exclude: ['password_hash']
-        }
-      });
-
-      // Get gas brands
-      const gasBrands = await db.UserGasBrand.findAll({
-        where: { user_id: agentId },
-        include: [{
-          model: db.GasBrand,
-          as: 'brand',
-          attributes: ['id', 'name', 'logo_url']
-        }]
-      });
-
-      res.json({
-        success: true,
-        agent: {
-          ...agent.toJSON(),
-          gas_brands: gasBrands.map(gb => gb.brand)
-        }
-      });
-    } catch (error) {
-      console.error('Error getting agent profile:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to get agent profile'
-      });
-    }
-  };
-
-  // Update agent profile
-  updateAgentProfile = async (req, res) => {
-    try {
-      const agentId = req.user.id;
-      const updates = req.body;
-
-      const agent = await db.User.findByPk(agentId);
-      if (!agent) {
-        return res.status(404).json({
-          success: false,
-          message: 'Agent not found'
-        });
-      }
-
-      // Don't allow updating sensitive fields
-      delete updates.id;
-      delete updates.password_hash;
-      delete updates.user_type;
-      delete updates.is_verified;
-
-      await agent.update(updates);
-
-      res.json({
-        success: true,
-        message: 'Profile updated successfully',
-        agent
-      });
-    } catch (error) {
-      console.error('Error updating profile:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to update profile'
-      });
-    }
-  };
-
-  // Update location
-  updateLocation = async (req, res) => {
-    try {
-      const agentId = req.user.id;
-      const { latitude, longitude, address, area_name, county, town } = req.body;
-
-      const agent = await db.User.findByPk(agentId);
-      if (!agent) {
-        return res.status(404).json({
-          success: false,
-          message: 'Agent not found'
-        });
-      }
-
-      const updateData = {};
-      if (latitude !== undefined) updateData.latitude = latitude;
-      if (longitude !== undefined) updateData.longitude = longitude;
-      if (address !== undefined) updateData.address = address;
-      if (area_name !== undefined) updateData.area_name = area_name;
-      if (county !== undefined) updateData.county = county;
-      if (town !== undefined) updateData.town = town;
-
-      await agent.update(updateData);
-
-      res.json({
-        success: true,
-        message: 'Location updated successfully',
-        location: {
-          latitude: agent.latitude,
-          longitude: agent.longitude,
-          address: agent.address,
-          area_name: agent.area_name,
-          county: agent.county,
-          town: agent.town
-        }
-      });
-    } catch (error) {
-      console.error('Error updating location:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to update location'
-      });
-    }
-  };
-
-  // Update contact info
-  updateContactInfo = async (req, res) => {
-    try {
-      const agentId = req.user.id;
-      const { phone_number, email, business_name } = req.body;
-
-      const agent = await db.User.findByPk(agentId);
-      if (!agent) {
-        return res.status(404).json({
-          success: false,
-          message: 'Agent not found'
-        });
-      }
-
-      await agent.update({
-        phone_number: phone_number || agent.phone_number,
-        email: email || agent.email,
-        business_name: business_name || agent.business_name
-      });
-
-      res.json({
-        success: true,
-        message: 'Contact information updated successfully',
-        contact: {
-          phone_number: agent.phone_number,
-          email: agent.email,
-          business_name: agent.business_name
-        }
-      });
-    } catch (error) {
-      console.error('Error updating contact:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to update contact information'
-      });
-    }
-  };
-
-  // Submit verification
-  submitVerification = async (req, res) => {
-    try {
-      const agentId = req.user.id;
-      const { id_number, kra_pin, business_registration } = req.body;
-
-      const agent = await db.User.findByPk(agentId);
-      if (!agent) {
-        return res.status(404).json({
-          success: false,
-          message: 'Agent not found'
-        });
-      }
-
-      await agent.update({
-        id_number: id_number || agent.id_number,
-        kra_pin: kra_pin || agent.kra_pin,
-        business_registration_number: business_registration || agent.business_registration_number,
-        verification_status: 'pending'
-      });
-
-      res.json({
-        success: true,
-        message: 'Verification submitted successfully. Pending review.'
-      });
-    } catch (error) {
-      console.error('Error submitting verification:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to submit verification'
-      });
-    }
-  };
-
   // ========== NOTIFICATIONS ==========
 
   // Get notifications
   getNotifications = async (req, res) => {
     try {
       const agentId = req.user.id;
-      const { unreadOnly, page = 1, limit = 20 } = req.query;
 
-      // This would need a Notification model
-      // For now, return mock data
+      // Mock notifications for now
       res.json({
         success: true,
         notifications: [
@@ -1228,12 +1311,7 @@ class AgentController {
             created_at: new Date(Date.now() - 86400000)
           }
         ],
-        unread_count: 1,
-        pagination: {
-          total: 2,
-          page: parseInt(page),
-          limit: parseInt(limit)
-        }
+        unread_count: 1
       });
     } catch (error) {
       console.error('Error getting notifications:', error);
@@ -1249,7 +1327,6 @@ class AgentController {
     try {
       const { notificationId } = req.params;
 
-      // Would update notification in database
       res.json({
         success: true,
         message: 'Notification marked as read'
@@ -1269,9 +1346,7 @@ class AgentController {
   getSupportTickets = async (req, res) => {
     try {
       const agentId = req.user.id;
-      const { status, page = 1, limit = 20 } = req.query;
 
-      // This would need a SupportTicket model
       res.json({
         success: true,
         tickets: [
@@ -1284,12 +1359,7 @@ class AgentController {
             created_at: new Date(),
             updated_at: new Date()
           }
-        ],
-        pagination: {
-          total: 1,
-          page: parseInt(page),
-          limit: parseInt(limit)
-        }
+        ]
       });
     } catch (error) {
       console.error('Error getting support tickets:', error);
@@ -1303,7 +1373,6 @@ class AgentController {
   // Create support ticket
   createSupportTicket = async (req, res) => {
     try {
-      const agentId = req.user.id;
       const { subject, message, priority = 'medium' } = req.body;
 
       if (!subject || !message) {
@@ -1313,7 +1382,6 @@ class AgentController {
         });
       }
 
-      // Would create ticket in database
       res.status(201).json({
         success: true,
         message: 'Support ticket created successfully',

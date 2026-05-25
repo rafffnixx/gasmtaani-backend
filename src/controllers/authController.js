@@ -1478,117 +1478,124 @@ verifyCodeAndCreateUser = async (req, res) => {
   /**
    * 📋 GET AGENT PROFILE - Complete agent details
    */
-  getAgentProfile = async (req, res) => {
-    console.log('\n' + '='.repeat(80));
-    console.log(consoleStyle.header, '📋 GET AGENT PROFILE');
-    console.log(consoleStyle.time, `📅 Time: ${formatKenyaTime(new Date())}`);
+// In authController.js - Replace the getAgentProfile function
+// In authController.js - Replace the getAgentProfile function with this
+getAgentProfile = async (req, res) => {
+  try {
+    const agentId = req.user.id;
+    console.log(`📋 Getting profile for agent: ${agentId}`);
     
-    try {
-      const userId = req.user.id;
+    // First, check if the user exists and is an agent
+    const [userCheck] = await db.sequelize.query(`
+      SELECT id, user_type FROM users WHERE id = ?
+    `, {
+      replacements: [agentId],
+      type: db.sequelize.QueryTypes.SELECT
+    });
 
-      const user = await db.User.findOne({
-        where: { 
-          id: userId,
-          user_type: 'agent'
-        },
-        attributes: [
-          'id', 'email', 'phone_number', 'full_name', 'user_type',
-          'is_verified', 'is_agent_profile_complete',
-          'business_name', 'business_address', 'area_name',
-          'town', 'county', 'address',
-          'latitude', 'longitude',
-          'id_number', 'kra_pin', 'business_registration_number',
-          'agent_status', 'profile_completed_at',
-          'delivery_radius', 'operating_hours',
-          'created_at', 'updated_at'
-        ]
-      });
-
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'Agent not found'
-        });
-      }
-
-      // Fetch gas brands
-      const userGasBrands = await db.UserGasBrand.findAll({
-        where: { user_id: userId },
-        include: [
-          {
-            model: db.GasBrand,
-            as: 'gas_brand',
-            attributes: ['id', 'name', 'logo_url']
-          }
-        ]
-      });
-
-      const gasBrands = userGasBrands.map(ugb => ugb.gas_brand).filter(Boolean);
-
-      // Fetch wallet
-      const wallet = await db.Wallet.findOne({
-        where: { user_id: userId },
-        attributes: ['id', 'balance', 'currency']
-      });
-
-      // Fetch agent profile
-      const agentProfile = await db.AgentProfile.findOne({
-        where: { agent_id: userId },
-        attributes: ['id', 'rating', 'total_orders', 'commission_rate', 'approval_status']
-      });
-
-      const agentData = {
-        id: user.id,
-        email: user.email,
-        phone_number: user.phone_number,
-        full_name: user.full_name,
-        user_type: user.user_type,
-        is_verified: user.is_verified,
-        is_agent_profile_complete: user.is_agent_profile_complete,
-        agent_status: user.agent_status,
-        profile_completed_at: user.profile_completed_at,
-        
-        business_name: user.business_name,
-        business_address: user.business_address,
-        area_name: user.area_name,
-        
-        town: user.town && user.town !== 'undefined' ? String(user.town) : null,
-        county: user.county && user.county !== 'undefined' ? String(user.county) : null,
-        address: user.address,
-        latitude: user.latitude ? parseFloat(user.latitude) : null,
-        longitude: user.longitude ? parseFloat(user.longitude) : null,
-        hasLocation: !!(user.latitude && user.longitude),
-        
-        id_number: user.id_number,
-        kra_pin: user.kra_pin,
-        business_registration_number: user.business_registration_number,
-        
-        delivery_radius: user.delivery_radius || 5,
-        operating_hours: user.operating_hours || '24/7',
-        
-        gas_brands: gasBrands,
-        agent_profile: agentProfile,
-        wallet: wallet,
-        
-        created_at: user.created_at,
-        updated_at: user.updated_at
-      };
-
-      res.json({
-        success: true,
-        agent: agentData,
-        timestamp: new Date().toISOString()
-      });
-
-    } catch (error) {
-      console.error('🔥 AGENT PROFILE ERROR:', error);
-      res.status(500).json({
+    if (!userCheck) {
+      console.log('❌ User not found');
+      return res.status(404).json({
         success: false,
-        message: 'Failed to get agent profile',
-        error: error.message
+        message: 'User not found'
       });
     }
-  };
+
+    if (userCheck.user_type !== 'agent') {
+      console.log('❌ User is not an agent:', userCheck.user_type);
+      return res.status(403).json({
+        success: false,
+        message: 'User is not an agent'
+      });
+    }
+
+    // Use raw query to get agent data (bypasses association issues)
+    const agentResults = await db.sequelize.query(`
+      SELECT 
+        id, 
+        email, 
+        phone_number, 
+        full_name, 
+        user_type, 
+        is_verified, 
+        is_agent_profile_complete, 
+        business_name,
+        business_address, 
+        area_name, 
+        town, 
+        county, 
+        address,
+        latitude, 
+        longitude, 
+        id_number, 
+        kra_pin,
+        business_registration_number, 
+        agent_status, 
+        profile_completed_at,
+        delivery_radius, 
+        operating_hours, 
+        created_at, 
+        updated_at,
+        profile_image
+      FROM users 
+      WHERE id = ? AND user_type = 'agent'
+    `, {
+      replacements: [agentId],
+      type: db.sequelize.QueryTypes.SELECT
+    });
+
+    console.log('📦 Query results:', agentResults ? `Found ${agentResults.length} rows` : 'No results');
+
+    if (!agentResults || agentResults.length === 0) {
+      console.log('❌ Agent not found in database');
+      return res.status(404).json({
+        success: false,
+        message: 'Agent profile not found'
+      });
+    }
+
+    const agent = agentResults[0];
+    
+    console.log('✅ Agent found:', {
+      id: agent.id,
+      business_name: agent.business_name,
+      town: agent.town,
+      county: agent.county,
+      area_name: agent.area_name
+    });
+
+    // Get gas brands using raw query
+    const gasBrands = await db.sequelize.query(`
+      SELECT gb.id, gb.name, gb.logo_url
+      FROM gas_brands gb
+      INNER JOIN user_gas_brands ugb ON gb.id = ugb.gas_brand_id
+      WHERE ugb.user_id = ?
+    `, {
+      replacements: [agentId],
+      type: db.sequelize.QueryTypes.SELECT
+    });
+
+    console.log(`✅ Found ${gasBrands.length} gas brands`);
+
+    // Add gas brands to response
+    agent.gas_brands = gasBrands;
+
+    res.json({
+      success: true,
+      agent: agent
+    });
+
+  } catch (error) {
+    console.error('❌ Error in getAgentProfile:', error);
+    console.error('Error details:', error.message);
+    console.error('Stack:', error.stack);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get agent profile',
+      error: error.message
+    });
+  }
+};
 
   /**
    * ✏️ UPDATE AGENT PROFILE
